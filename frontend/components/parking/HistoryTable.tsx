@@ -17,8 +17,8 @@ const GATE_LABELS: Record<string, string> = {
 function gateLabel(gate_id: string, gate_location?: string): string {
   // Prefer gate_location from backend (already human-readable)
   if (gate_location) return gate_location;
-  // Fallback to local map
-  return GATE_LABELS[gate_id];
+  // Fallback to local map, then to gate_id itself
+  return GATE_LABELS[gate_id] ?? gate_id;
 }
 
 interface HistoryRecord {

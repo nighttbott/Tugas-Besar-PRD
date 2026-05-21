@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from core.config import get_settings, Settings
 from core.database import VEHICLE_DB, get_active_session, _normalize, save_vehicle_db
@@ -137,4 +137,87 @@ async def admin_unverify_anpr(
         "plate_raw":     vehicle["plate_raw"],
         "anpr_verified": False,
         "status":        "inactive",
+    }
+
+
+# ── PATCH /api/v1/admin/vehicles/{plate}/plate ────────────────────────────────
+class ChangePlateRequest(BaseModel):
+    new_plate: str = Field(..., min_length=4, max_length=12,
+                           description="Plat nomor baru (normalized, no spaces)")
+    reason: str = Field(default="", description="Alasan perubahan plat")
+
+    @field_validator("new_plate")
+    @classmethod
+    def validate_plate(cls, v: str) -> str:
+        import re
+        normalized = v.upper().replace(" ", "")
+        if not re.match(r"^[A-Z]{1,2}\d{1,4}[A-Z]{1,3}$", normalized):
+            raise ValueError("Format plat tidak valid. Contoh: B 1234 ABC, D 4321 ITB")
+        return normalized
+
+
+@router.patch("/vehicles/{plate}/plate", summary="Change vehicle plate number (admin only)")
+async def admin_change_plate(
+    plate: str,
+    req: ChangePlateRequest,
+    admin_payload: Annotated[dict, Depends(require_admin_token)],
+) -> dict:
+    """
+    Admin-only: change a vehicle's plate number.
+    - Old plate entry is removed from VEHICLE_DB
+    - New plate entry is created with the same vehicle data
+    - anpr_verified is reset to False (requires re-verification with new STNK)
+    - status is reset to "inactive"
+    - Persists to db.json immediately
+    """
+    from core.database import VEHICLE_DB, save_vehicle_db, _normalize
+
+    old_key = _normalize(plate)
+    new_key = req.new_plate  # Already normalized by validator
+
+    if old_key not in VEHICLE_DB:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Kendaraan tidak ditemukan.")
+
+    if new_key in VEHICLE_DB and new_key != old_key:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail=f"Plat {new_key} sudah terdaftar di sistem.",
+        )
+
+    # Check if vehicle is currently parked
+    session = await get_active_session(old_key)
+    if session:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail="Kendaraan sedang parkir. Tidak dapat mengubah plat nomor.",
+        )
+
+    # Copy vehicle data to new key
+    vehicle = dict(VEHICLE_DB[old_key])
+
+    # Format new plate for display
+    import re
+    m = re.match(r"^([A-Z]{1,2})(\d{1,4})([A-Z]{1,3})$", new_key)
+    new_plate_raw = f"{m.group(1)} {m.group(2)} {m.group(3)}" if m else new_key
+
+    vehicle["plate_raw"]     = new_plate_raw
+    vehicle["anpr_verified"] = False   # Must re-verify with new STNK
+    vehicle["status"]        = "inactive"
+    vehicle["plate_changed_by"] = admin_payload.get("admin_id", "Admin")
+    vehicle["plate_changed_at"] = datetime.now(timezone.utc).isoformat()
+    vehicle["plate_change_reason"] = req.reason
+
+    # Remove old, insert new
+    del VEHICLE_DB[old_key]
+    VEHICLE_DB[new_key] = vehicle
+    save_vehicle_db()
+
+    return {
+        "message":         f"Plat nomor berhasil diubah dari {VEHICLE_DB.get(old_key, {}).get('plate_raw', old_key)} ke {new_plate_raw}.",
+        "old_plate":       old_key,
+        "new_plate":       new_key,
+        "new_plate_raw":   new_plate_raw,
+        "anpr_verified":   False,
+        "status":          "inactive",
+        "note":            "Kendaraan perlu diverifikasi ulang ANPR dengan STNK baru.",
     }

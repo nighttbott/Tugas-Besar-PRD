@@ -341,6 +341,37 @@ async def set_primary_ewallet(
 
 
 
+# ── PATCH /api/v1/vehicles/{plate}/model ─────────────────────────────────────
+class EditModelRequest(BaseModel):
+    model: str = Field(..., min_length=2, max_length=60)
+
+
+@router.patch("/{plate}/model", summary="Edit vehicle model name (user)")
+async def edit_model(
+    plate: str,
+    req: EditModelRequest,
+    _: Annotated[dict, Depends(require_dashboard_token)] = None,
+) -> dict:
+    """
+    User-accessible: update the vehicle model/merk name only.
+    Plate number changes require admin — this endpoint only touches 'model'.
+    """
+    key = _normalize(plate)
+    if key not in VEHICLE_DB:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Kendaraan tidak ditemukan.")
+
+    old_model = VEHICLE_DB[key]["model"]
+    VEHICLE_DB[key]["model"] = req.model.strip()
+    save_vehicle_db()
+
+    return {
+        "message":   "Model kendaraan berhasil diperbarui.",
+        "plate_raw": VEHICLE_DB[key]["plate_raw"],
+        "old_model": old_model,
+        "new_model": req.model.strip(),
+    }
+
+
 # ── PUT /api/v1/vehicles/{plate}/verify ──────────────────────────────────────
 class VerifyAnprRequest(BaseModel):
     verified_by: str = Field(default="Petugas Parkir")

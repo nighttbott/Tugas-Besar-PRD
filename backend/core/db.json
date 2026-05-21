@@ -10,14 +10,14 @@
     "ewallets": [
       {
         "provider": "GoPay",
-        "balance": 85000,
-        "masked_account": "0812****7890",
+        "balance": 100000,
+        "masked_account": "08xx-xxxx-xxxx",
         "is_primary": true
       },
       {
         "provider": "OVO",
-        "balance": 120000,
-        "masked_account": "0856****1234",
+        "balance": 100000,
+        "masked_account": "08xx-xxxx-xxxx",
         "is_primary": false
       },
       {
@@ -28,12 +28,6 @@
       },
       {
         "provider": "Dana",
-        "balance": 100000,
-        "masked_account": "08xx-xxxx-xxxx",
-        "is_primary": false
-      },
-      {
-        "provider": "LinkAja",
         "balance": 100000,
         "masked_account": "08xx-xxxx-xxxx",
         "is_primary": false
@@ -58,13 +52,13 @@
     "nim": "2021184750",
     "owner": "Muhammad Abduh",
     "vehicle_type": "motor",
-    "model": "ADV\\",
+    "model": "ADV",
     "status": "active",
     "anpr_verified": true,
     "ewallets": [
       {
         "provider": "GoPay",
-        "balance": 95000,
+        "balance": 87000,
         "masked_account": "08xx-xxxx-xxxx",
         "is_primary": true
       }
@@ -84,6 +78,39 @@
     "ewallets": [],
     "anpr_verified_by": "Admin Parkir",
     "anpr_verified_at": "2026-05-14T11:37:51.341200+00:00",
+    "anpr_notes": ""
+  },
+  "B1387DKC": {
+    "plate_raw": "B 1387 DKC",
+    "nim": "2021184750",
+    "owner": "Muhammad Abduh",
+    "vehicle_type": "mobil",
+    "model": "Avanza",
+    "status": "active",
+    "anpr_verified": true,
+    "ewallets": [
+      {
+        "provider": "GoPay",
+        "balance": 96000,
+        "masked_account": "08xx-xxxx-xxxx",
+        "is_primary": true
+      }
+    ],
+    "anpr_verified_by": "Admin Parkir",
+    "anpr_verified_at": "2026-05-18T07:34:27.121380+00:00",
+    "anpr_notes": ""
+  },
+  "BD2541WH": {
+    "plate_raw": "BD 2541 WH",
+    "nim": "2021184750",
+    "owner": "Muhammad Abduh",
+    "vehicle_type": "motor",
+    "model": "Astrea",
+    "status": "active",
+    "anpr_verified": true,
+    "ewallets": [],
+    "anpr_verified_by": "Admin Parkir",
+    "anpr_verified_at": "2026-05-18T10:57:09.332431+00:00",
     "anpr_notes": ""
   }
 }

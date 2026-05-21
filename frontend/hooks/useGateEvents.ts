@@ -42,13 +42,15 @@ export function useGateEvents(
     wsRef.current = ws;
 
     ws.onopen = () => {
-      if (!mountedRef.current) { ws.close(); return; }
+      // ✨ PERBAIKAN: Pastikan hantu StrictMode lama tidak ikut mengubah state
+      if (wsRef.current !== ws) { ws.close(); return; }
       setConnState("connected");
       retryDelay.current = INITIAL_DELAY;
     };
 
     ws.onmessage = (event) => {
-      if (!mountedRef.current) return;
+      // ✨ PERBAIKAN: Jika socket ini bukan socket utama yang aktif, abaikan pesannya!
+      if (wsRef.current !== ws) return;
       try {
         const data = JSON.parse(event.data as string) as GateEvent;
         setEvents((prev) => [data, ...prev].slice(0, MAX_EVENTS));
@@ -57,11 +59,12 @@ export function useGateEvents(
     };
 
     ws.onerror = () => {
-      if (mountedRef.current) setConnState("error");
+      if (wsRef.current === ws) setConnState("error");
     };
 
     ws.onclose = () => {
-      if (!mountedRef.current) return;
+      // ✨ PERBAIKAN: Jangan biarkan hantu socket lama memicu timer reconnect baru
+      if (wsRef.current !== ws) return;
       setConnState("disconnected");
       retryTimer.current = setTimeout(() => {
         retryDelay.current = Math.min(retryDelay.current * 2, MAX_DELAY);
@@ -77,6 +80,7 @@ export function useGateEvents(
       mountedRef.current = false;
       if (retryTimer.current) clearTimeout(retryTimer.current);
       wsRef.current?.close();
+      wsRef.current = null; // ✨ PERBAIKAN: Kosongkan ref saat unmount total
     };
   }, [connect]);
 
