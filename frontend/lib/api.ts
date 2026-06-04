@@ -33,10 +33,13 @@ export interface Vehicle {
   model: string;
   status: VehicleStatus;
   anpr_verified: boolean;
+  verification_status: "pending" | "verified" | "flagged" | "blocked";
+  flag_reason:         string | null;
   ewallet: EWallet | null;
   ewallet_backup: EWallet | null;
   is_parked: boolean;
   active_session: ActiveSession | null;
+  ewallets: { provider: string; balance: number; is_primary: boolean; masked_account?: string }[];
 }
 
 export interface ActiveSession {
@@ -52,6 +55,7 @@ export interface ActiveSession {
   est_fee: number;
   est_fee_label: string;
   primary_ewallet: EWallet | null;  // matches backend field name exactly
+  ewallet?: EWallet | null;
 }
 
 export interface SessionStats {
@@ -93,14 +97,74 @@ export interface ApiError {
 
 // ── Internal fetch helper ─────────────────────────────────────────────────────
 
+let _cachedToken: string | null = null;
+
+export function setToken(token: string) {
+  _cachedToken = token;
+  if (typeof window !== "undefined") {
+    localStorage.setItem("parking_token", token);
+  }
+}
+
+export function clearToken() {
+  _cachedToken = null;
+  if (typeof window !== "undefined") {
+    localStorage.removeItem("parking_token");
+    localStorage.removeItem("parking_user");
+  }
+}
+
+export function getStoredUser(): { nim: string; name: string } | null {
+  if (typeof window === "undefined") return null;
+  const raw = localStorage.getItem("parking_user");
+  return raw ? JSON.parse(raw) : null;
+}
+
+export function setStoredUser(nim: string, name: string) {
+  if (typeof window !== "undefined") {
+    localStorage.setItem("parking_user", JSON.stringify({ nim, name }));
+  }
+}
+
+export async function getToken(): Promise<string | null> {
+  if (_cachedToken) return _cachedToken;
+
+  // Cek localStorage dulu (user sudah login sebelumnya)
+  if (typeof window !== "undefined") {
+    const stored = localStorage.getItem("parking_token");
+    if (stored) { _cachedToken = stored; return _cachedToken; }
+  }
+
+  return null;
+}
+
+export async function loginUser(nim: string, password: string): Promise<{ nim: string; name: string }> {
+  _cachedToken = null;
+  const res = await fetch(`${API_BASE}/api/v1/auth/user-login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nim, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail ?? "Login gagal.");
+  }
+  const data = await res.json();
+  setToken(data.access_token);
+  setStoredUser(data.nim, data.name);
+  _cachedToken = data.access_token;
+  return { nim: data.nim, name: data.name };
+}
+
 async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
   token?: string | null,
 ): Promise<T> {
+  const resolvedToken = token ?? await getToken();   // ← auto-inject
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(resolvedToken ? { Authorization: `Bearer ${resolvedToken}` } : {}),
   };
 
   const res = await fetch(`${API_BASE}${path}`, {
@@ -121,21 +185,17 @@ async function apiFetch<T>(
 // ── Vehicle API ───────────────────────────────────────────────────────────────
 
 export const vehicleApi = {
-  /** List all vehicles for a NIM */
-  list: (token: string, nim = "2021184750"): Promise<Vehicle[]> =>
-    apiFetch<Vehicle[]>(`/api/v1/vehicles/?nim=${nim}`, {}, token),
+  list: (nim = "2021184750"): Promise<Vehicle[]> =>
+    apiFetch<Vehicle[]>(`/api/v1/vehicles/?nim=${nim}`),
 
-  /** Register a new vehicle */
-  add: (token: string, payload: AddVehiclePayload): Promise<{ message: string; plate_raw: string }> =>
-    apiFetch(`/api/v1/vehicles/`, { method: "POST", body: JSON.stringify(payload) }, token),
+  add: (payload: AddVehiclePayload) =>
+    apiFetch(`/api/v1/vehicles/`, { method: "POST", body: JSON.stringify(payload) }),
 
-  /** Delete a vehicle by normalized plate */
-  delete: (token: string, plate: string): Promise<{ message: string }> =>
-    apiFetch(`/api/v1/vehicles/${encodeURIComponent(plate)}`, { method: "DELETE" }, token),
+  delete: (plate: string) =>
+    apiFetch(`/api/v1/vehicles/${encodeURIComponent(plate)}`, { method: "DELETE" }),
 
-  /** Get active sessions + dashboard stats */
-  sessions: (token: string, nim = "2021184750"): Promise<SessionStats> =>
-    apiFetch<SessionStats>(`/api/v1/vehicles/sessions?nim=${nim}`, {}, token),
+  sessions: (nim = "2021184750"): Promise<SessionStats> =>
+    apiFetch<SessionStats>(`/api/v1/vehicles/sessions?nim=${nim}`),
 };
 
 // ── Gate API ──────────────────────────────────────────────────────────────────
@@ -144,14 +204,15 @@ export const gateApi = {
   getStatus: (): Promise<SystemStatus> =>
     apiFetch<SystemStatus>("/api/v1/gate/status"),
 
-  getHistory: (token: string, limit = 50): Promise<unknown[]> =>
-    apiFetch(`/api/v1/gate/history?limit=${limit}`, {}, token),
+  getHistory: (limit = 50): Promise<unknown[]> =>
+    apiFetch(`/api/v1/gate/history?limit=${limit}`),
 };
 
 // ── WebSocket URL builder ─────────────────────────────────────────────────────
 
-export function buildGateEventsWsUrl(token: string): string {
-  return `${WS_BASE}/ws/gate-events?token=${encodeURIComponent(token)}`;
+export async function buildGateEventsWsUrl(): Promise<string> {
+  const token = await getToken();
+  return `${WS_BASE}/ws/gate-events?token=${encodeURIComponent(token ?? "")}`;
 }
 
 // ── Indonesian plate validator (client-side mirror of backend regex) ───────────

@@ -9,7 +9,6 @@ import { useGateEvents } from "@/hooks/useGateEvents";
 import type { GateEvent } from "@/lib/api";
 
 interface LiveGateEventProps {
-  token: string | null;
   onEvent?: (event: GateEvent) => void;
 }
 
@@ -71,26 +70,9 @@ function EventRow({ event }: { event: GateEvent }) {
   );
 }
 
-export function LiveGateEvent({ token, onEvent }: LiveGateEventProps) {
-  const { events, connectionState } = useGateEvents(token, onEvent);
+export function LiveGateEvent({ onEvent }: LiveGateEventProps) {
+  const { events, connectionState } = useGateEvents(onEvent);
   const cfg = WS_STATE_CONFIG[connectionState];
-
-  // When token is null, WS won't connect — show clear explanation
-  if (!token) {
-    return (
-      <div className="panel" style={{ marginBottom: 18 }}>
-        <div className="panel-head">Feed Real-Time Gerbang</div>
-        <div className="panel-body">
-          <div className="alert alert-info" style={{ margin: 0, fontSize: 12 }}>
-            <strong>Feed Real-Time Gerbang</strong> menampilkan setiap kendaraan yang
-            masuk/keluar secara langsung saat ANPR mendeteksi plat nomor.
-            Untuk mengaktifkan, set <code>NEXT_PUBLIC_DASHBOARD_TOKEN</code> di{" "}
-            <code>frontend/.env.local</code>.
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="panel" style={{ marginBottom: 18 }}>

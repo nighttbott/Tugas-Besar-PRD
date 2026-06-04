@@ -21,8 +21,8 @@ import { vehicleApi, type SessionStats, type ActiveSession } from "@/lib/api";
 import { LiveGateEvent } from "@/components/ui/LiveGateEvent";
 
 interface ParkingStatusProps {
-  token: string | null;
   totalVehicles: number;  // passed from parent (vehicle list count)
+  onGateEvent?: () => void;
 }
 
 function calcLiveDuration(entryTs: number) {
@@ -52,7 +52,7 @@ function formatEntryTime(iso: string) {
   return { time: `${time} WIB`, date };
 }
 
-export function ParkingStatus({ token, totalVehicles }: ParkingStatusProps) {
+export function ParkingStatus({ totalVehicles, onGateEvent }: ParkingStatusProps) {
   const [stats, setStats]       = useState<SessionStats | null>(null);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
@@ -65,9 +65,8 @@ export function ParkingStatus({ token, totalVehicles }: ParkingStatusProps) {
 
   // ── Fetch sessions from backend ────────────────────────────────────────────
   const fetchStats = useCallback(async () => {
-    if (!token) { setLoading(false); return; }
     try {
-      const data = await vehicleApi.sessions(token);
+      const data = await vehicleApi.sessions();
       setStats(data);
       setError(null);
     } catch (e: unknown) {
@@ -75,7 +74,7 @@ export function ParkingStatus({ token, totalVehicles }: ParkingStatusProps) {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     fetchStats();
@@ -98,24 +97,25 @@ export function ParkingStatus({ token, totalVehicles }: ParkingStatusProps) {
   // When a new gate event fires, refresh stats immediately
   const handleGateEvent = useCallback(() => {
     setTimeout(fetchStats, 1000); // 1s delay so Redis is updated
-  }, [fetchStats]);
+    if (onGateEvent) setTimeout(onGateEvent, 1500);
+  }, [fetchStats, onGateEvent]);
 
   const firstSession: ActiveSession | null = stats?.active_sessions?.[0] ?? null;
   const activeCount  = stats?.active_count ?? 0;
   const totalReg     = stats?.total_vehicles ?? totalVehicles;
 
   const entryFmt = firstSession ? formatEntryTime(firstSession.entry_time) : null;
-  const ewalletLabel = firstSession?.ewallet
-    ? `Autodebit ${firstSession.ewallet.provider}`
+  const ewalletLabel = firstSession?.primary_ewallet
+    ? `Autodebit ${firstSession.primary_ewallet.provider}`
     : "Tidak ada e-wallet";
-  const ewalletSaldo = firstSession?.ewallet
-    ? `Saldo: Rp${firstSession.ewallet.balance.toLocaleString("id-ID")}`
+  const ewalletSaldo = firstSession?.primary_ewallet
+    ? `Saldo: Rp${firstSession.primary_ewallet.balance.toLocaleString("id-ID")}`
     : "–";
 
   return (
     <div>
       {/* Real-time gate event feed */}
-      <LiveGateEvent token={token} onEvent={handleGateEvent} />
+      <LiveGateEvent onEvent={handleGateEvent} />
 
       {/* ── Ringkasan Hari Ini ── */}
       <div className="sec-title">Ringkasan Hari Ini</div>

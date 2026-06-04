@@ -21,20 +21,20 @@ function gateLabel(gate_id: string, gate_location?: string): string {
   return GATE_LABELS[gate_id] ?? gate_id;
 }
 
-interface HistoryRecord {
+export interface HistoryRecord {
   plate:          string;
   gate_id:        string;
-  gate_location?: string;  // set by backend create_session
+  gate_location?: string;
   confidence:     number;
   entry_time:     string;
   exit_time?:     string;
   duration_secs?: number;
   fee?:           number;
   status:         "active" | "completed";
+  is_guest?:      boolean;
 }
 
 interface HistoryTableProps {
-  token:    string | null;
   vehicles: Vehicle[];
 }
 
@@ -58,7 +58,7 @@ function confColor(c: number) {
   return c >= 0.9 ? "#27ae60" : c >= 0.75 ? "#b45309" : "#c0392b";
 }
 
-export function HistoryTable({ token, vehicles }: HistoryTableProps) {
+export function HistoryTable({ vehicles }: HistoryTableProps) {
   const [records,  setRecords]  = useState<HistoryRecord[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState<string | null>(null);
@@ -66,24 +66,29 @@ export function HistoryTable({ token, vehicles }: HistoryTableProps) {
   const [filterBulan, setFilterBulan] = useState(NOW_MONTH);
 
   useEffect(() => {
-    if (!token) { setLoading(false); return; }
-    const apiBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-    fetch(`${apiBase}/api/v1/gate/history?limit=200`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then((data: HistoryRecord[]) => { setRecords(data); setLoading(false); })
-      .catch((e: unknown) => {
-        setError(e instanceof Error ? e.message : "Gagal memuat riwayat.");
-        setLoading(false);
-      });
-  }, [token]);
+    import("@/lib/api").then(({ gateApi }) =>
+      gateApi.getHistory(200)
+        .then((data) => {
+          const userPlates = new Set(vehicles.map((v) => v.plate_normalized));
+          const filtered = (data as HistoryRecord[]).filter((r) =>
+            userPlates.size === 0 || userPlates.has(r.plate)
+          );
+          setRecords(filtered);
+          setLoading(false);
+        })
+        .catch((e: unknown) => {
+          setError(e instanceof Error ? e.message : "Gagal memuat riwayat.");
+          setLoading(false);
+        })
+    );
+  }, [vehicles]);
 
   const filtered = records.filter((r) => {
     const platMatch = filterPlat === "all" || r.plate === filterPlat;
     const bulanIdx  = MONTHS.indexOf(filterBulan);
     const entryDate = new Date(r.entry_time);
     const bulanMatch = bulanIdx === -1 || entryDate.getMonth() === bulanIdx;
+    const notGuest = !r.is_guest;
     return platMatch && bulanMatch;
   });
 

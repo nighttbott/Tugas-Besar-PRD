@@ -16,15 +16,15 @@ import { useCallback, useEffect, useState } from "react";
 import { Navbar }        from "@/components/layout/Navbar";
 import { Breadcrumb }    from "@/components/layout/Breadcrumb";
 import { TabMenu, type TabId } from "@/components/parking/TabMenu";
-import { VehicleCard, type VehicleData } from "@/components/parking/VehicleCard";
+import { VehicleCard } from "@/components/parking/VehicleCard";
 import { ParkingStatus } from "@/components/parking/ParkingStatus";
 import { HistoryTable }  from "@/components/parking/HistoryTable";
 import { TarifInfo }     from "@/components/parking/TarifInfo";
-import { vehicleApi, validatePlate, type VehicleType } from "@/lib/api";
+import { vehicleApi, validatePlate, type VehicleType, type Vehicle } from "@/lib/api";
+import { getStoredUser, loginUser, clearToken } from "@/lib/api";
 
-// ── Dev token — replace with real auth in production ─────────────────────────
+
 // Generate with: python -c "from core.security import create_dashboard_token; ..."
-const DEV_TOKEN = process.env.NEXT_PUBLIC_DASHBOARD_TOKEN ?? null;
 
 // ── Indonesian plate input formatter ─────────────────────────────────────────
 function formatPlateInput(raw: string): string {
@@ -38,10 +38,16 @@ function formatPlateInput(raw: string): string {
 
 // ─────────────────────────────────────────────────────────────────────────────
 export default function ParkirPage() {
-  const token = DEV_TOKEN;
+  // User
+  const [user, setUser] = useState<{ nim: string; name: string } | null>(null);
+  const [loginNim, setLoginNim] = useState("");
+  const [loginPass, setLoginPass] = useState("");
+  const [loginErr, setLoginErr] = useState<string | null>(null);
+  const [loginLoading, setLoginLoading] = useState(false);
 
+  // Vehicle
   const [activeTab,    setActiveTab]    = useState<TabId>("kendaraan");
-  const [vehicles, setVehicles] = useState<VehicleData[]>([]);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [vehiclesLoad, setVehiclesLoad] = useState(true);
   const [vehiclesErr,  setVehiclesErr]  = useState<string | null>(null);
 
@@ -53,26 +59,46 @@ export default function ParkirPage() {
   const [addLoading,  setAddLoading]  = useState(false);
   const [addMsg,      setAddMsg]      = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // ── Load user information from backend ────────────────────────────────────────────
+  useEffect(() => {
+    const stored = getStoredUser();
+    if (stored) setUser(stored);
+  }, []);
+
+  const handleLogin = async () => {
+    setLoginLoading(true); setLoginErr(null);
+    try {
+      const u = await loginUser(loginNim, loginPass);
+      setUser(u);
+    } catch (e: unknown) {
+      setLoginErr(e instanceof Error ? e.message : "Login gagal.");
+    } finally { setLoginLoading(false); }
+  };
+
+  const handleLogout = () => {
+    clearToken();
+    setUser(null);
+    setVehicles([]);
+  };
+
   // ── Load vehicles from backend ────────────────────────────────────────────
   const loadVehicles = useCallback(async () => {
-    if (!token) {
-      setVehiclesLoad(false);
-      setVehiclesErr("Token tidak tersedia. Set NEXT_PUBLIC_DASHBOARD_TOKEN di .env.local");
-      return;
-    }
-    setVehiclesLoad(true);
+    setVehiclesLoad(true); 
     setVehiclesErr(null);
     try {
-      const data = await vehicleApi.list(token);
+      const data = await vehicleApi.list();
       setVehicles(data);
     } catch (e: unknown) {
       setVehiclesErr(e instanceof Error ? e.message : "Gagal memuat data kendaraan.");
     } finally {
       setVehiclesLoad(false);
     }
-  }, [token]);
+  }, []);
 
-  useEffect(() => { loadVehicles(); }, [loadVehicles]);
+  useEffect(() => {
+    const id = setInterval(loadVehicles, 20_000); // refresh tiap 5 detik
+    return () => clearInterval(id);
+  }, [loadVehicles]);
 
   // ── Plate input handler with auto-format ──────────────────────────────────
   const handlePlatChange = (raw: string) => {
@@ -98,11 +124,11 @@ export default function ParkirPage() {
 
     setAddLoading(true);
     try {
-      const result = await vehicleApi.add(token!, {
+      const result = await vehicleApi.add({
         plate_number: validation.normalized!,
         vehicle_type: newJenis,
         model:        newModel.trim(),
-      });
+      }) as { message: string; plate_raw: string };
       setAddMsg({ type: "success", text: result.message });
       setNewPlat("");
       setNewModel("");
@@ -124,9 +150,114 @@ export default function ParkirPage() {
     setVehicles((v) => v.filter((x) => x.plate_normalized !== plate));
   };
 
+  if (!user) {
+    return (
+      <>
+        <Navbar showSemester={false} minimal={true} />
+        <div style={{
+          background: "#f5f5f5", minHeight: "calc(100vh - 50px)",
+          display: "flex", flexDirection: "column",
+        }}>
+          <div style={{
+            flex: 1, display: "flex", alignItems: "center",
+            justifyContent: "center", padding: "40px 15px",
+          }}>
+            <div style={{ width: 320 }}>
+
+              {/* Panel */}
+              <div style={{
+                border: "1px solid #ddd", borderRadius: 4,
+                boxShadow: "0 1px 3px rgba(0,0,0,0.1)",
+                background: "#fff",
+              }}>
+                {/* Header biru */}
+                <div style={{
+                  background: "#337ab7", color: "#fff",
+                  padding: "10px 15px", borderRadius: "4px 4px 0 0",
+                  fontSize: 15, fontWeight: 500,
+                }}>
+                  Non-ITB Account
+                </div>
+
+                <div style={{ padding: "15px" }}>
+                  {/* Alert kuning */}
+                  <div style={{
+                    background: "#fcf8e3", border: "1px solid #faebcc",
+                    borderRadius: 4, padding: "10px 14px", marginBottom: 15,
+                  }}>
+                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, color: "#8a6d3b" }}>
+                      <li>13525001/mahasiswa1</li>
+                      <li>13525002/mahasiswa2</li>
+                      <li>13525003/mahasiswa3</li>
+                    </ul>
+                  </div>
+
+                  {/* Input NIM */}
+                  <input type="text" placeholder="User Name"
+                    value={loginNim}
+                    onChange={(e) => setLoginNim(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                    style={{
+                      display: "block", width: "100%", padding: "6px 12px",
+                      fontSize: 14, border: "1px solid #ccc", borderRadius: 4,
+                      fontFamily: "'Roboto', sans-serif", marginBottom: 10,
+                      boxSizing: "border-box", color: "#555",
+                    }} autoFocus />
+
+                  {/* Input Password */}
+                  <input type="password" placeholder="Password"
+                    value={loginPass}
+                    onChange={(e) => setLoginPass(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                    style={{
+                      display: "block", width: "100%", padding: "6px 12px",
+                      fontSize: 14, border: "1px solid #ccc", borderRadius: 4,
+                      fontFamily: "'Roboto', sans-serif", marginBottom: 10,
+                      boxSizing: "border-box", color: "#555",
+                    }} />
+
+                  {loginErr && (
+                    <div style={{
+                      background: "#f2dede", border: "1px solid #ebccd1",
+                      borderRadius: 4, padding: "8px 12px", fontSize: 13,
+                      color: "#a94442", marginBottom: 10,
+                    }}>
+                      {loginErr}
+                    </div>
+                  )}
+
+                  {/* Login button */}
+                  <div style={{ textAlign: "center", marginTop: 6 }}>
+                    <button type="button" onClick={handleLogin} disabled={loginLoading}
+                      style={{
+                        padding: "5px 20px", background: "#337ab7", color: "#fff",
+                        border: "1px solid #2e6da4", borderRadius: 4, fontSize: 14,
+                        cursor: loginLoading ? "not-allowed" : "pointer",
+                        fontFamily: "'Roboto', sans-serif",
+                        opacity: loginLoading ? 0.7 : 1,
+                      }}>
+                      {loginLoading ? "Masuk..." : "Login"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div style={{ borderTop: "1px solid #ddd", padding: "16px 15px", textAlign: "center" }}>
+            <div style={{ fontSize: 16, fontWeight: 300, color: "#333" }}>Institut Teknologi Bandung</div>
+            <div style={{ fontSize: 12, color: "#888", marginTop: 2 }}>Direktorat Pendidikan</div>
+          </div>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
-      <Navbar userName="Muhammad Abduh" showSemester={false} />
+      <Navbar userName={user?.name ?? ""} showSemester={false} onLogout={handleLogout} />
 
       <Breadcrumb crumbs={[{ label: "SIX", href: "/" }, { label: "Parkir" }]} />
 
@@ -171,7 +302,6 @@ export default function ParkirPage() {
                 <VehicleCard
                   key={v.plate_normalized}
                   vehicle={v}
-                  token={token}
                   onUpdated={loadVehicles}
                 />
               ))}
@@ -277,14 +407,14 @@ export default function ParkirPage() {
             TAB 2 — Status Parkir
         ══════════════════════════════════════════════════════════════════ */}
         <div className={`tab-content${activeTab === "status" ? " active" : ""}`}>
-          <ParkingStatus token={token} totalVehicles={vehicles.length} />
+          <ParkingStatus totalVehicles={vehicles.length} onGateEvent={loadVehicles} />
         </div>
 
         {/* ══════════════════════════════════════════════════════════════════
             TAB 3 — Riwayat & Biaya
         ══════════════════════════════════════════════════════════════════ */}
         <div className={`tab-content${activeTab === "riwayat" ? " active" : ""}`}>
-          <HistoryTable token={token} vehicles={vehicles} />
+          <HistoryTable vehicles={vehicles} />
         </div>
 
         {/* ══════════════════════════════════════════════════════════════════

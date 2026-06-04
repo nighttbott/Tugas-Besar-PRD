@@ -45,14 +45,19 @@ interface NavbarProps {
   userName?: string;
   showSemester?: boolean;
   semester?: string;
+  onLogout?: () => void;
+  minimal?: boolean;
 }
 
 export function Navbar({
-  userName = "Muhammad Abduh",
+  userName = "",
   showSemester = false,
   semester = "Semester 2 - 2025/2026",
+  onLogout,
+  minimal = false,
 }: NavbarProps) {
   const [lang, setLang] = useState<"ID" | "EN">("ID");
+  const [showDropdown, setShowDropdown] = useState(false);
 
   return (
     <nav
@@ -137,9 +142,9 @@ export function Navbar({
               flex: 1,
             }}
           >
-            <NavLi label="Aplikasi" />
-            <NavLi label="Menu" />
-            {showSemester && <NavLi label={semester} />}
+            {!minimal && <NavLi label="Aplikasi" />}
+            {!minimal && <NavLi label="Menu" />}
+            {!minimal && showSemester && <NavLi label={semester} />}
           </ul>
 
           {/* RIGHT: ID, EN, User */}
@@ -155,7 +160,7 @@ export function Navbar({
             }}
           >
             {/* ID — active state: background #080808, color #fff */}
-            <li style={{ display: "flex", alignItems: "stretch" }}>
+            {!minimal && <li style={{ display: "flex", alignItems: "stretch" }}>
               <button
                 type="button"
                 onClick={() => setLang("ID")}
@@ -191,10 +196,10 @@ export function Navbar({
               >
                 ID
               </button>
-            </li>
+            </li>}
 
             {/* EN */}
-            <li style={{ display: "flex", alignItems: "stretch" }}>
+            {!minimal && <li style={{ display: "flex", alignItems: "stretch" }}>
               <button
                 type="button"
                 onClick={() => setLang("EN")}
@@ -226,61 +231,89 @@ export function Navbar({
               >
                 EN
               </button>
-            </li>
+            </li>}
 
-            {/* User dropdown — fa-user-circle-o + name + caret */}
-            <li style={{ display: "flex", alignItems: "stretch" }}>
+            {/* User dropdown */}
+            {!minimal && <li style={{ display: "flex", alignItems: "stretch", position: "relative" }}>
               <button
                 type="button"
+                onClick={() => onLogout && setShowDropdown(!showDropdown)}
                 style={{
-                  padding: "0 15px",
-                  height: 50,
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  border: "none",
-                  fontFamily: "'Roboto', sans-serif",
-                  fontSize: 14,
-                  cursor: "pointer",
-                  color: "#9d9d9d",
-                  backgroundColor: "transparent",
-                  whiteSpace: "nowrap",
-                  transition: "background 0.1s, color 0.1s",
+                  padding: "0 15px", height: 50,
+                  display: "flex", alignItems: "center", gap: 6,
+                  border: "none", fontFamily: "'Roboto', sans-serif",
+                  fontSize: 14, cursor: "pointer", color: "#9d9d9d",
+                  backgroundColor: showDropdown ? "#080808" : "transparent",
+                  whiteSpace: "nowrap", transition: "background 0.1s, color 0.1s",
                 }}
                 onMouseEnter={(e) => {
                   (e.currentTarget as HTMLElement).style.color = "#fff";
                   (e.currentTarget as HTMLElement).style.backgroundColor = "#080808";
                 }}
                 onMouseLeave={(e) => {
-                  (e.currentTarget as HTMLElement).style.color = "#9d9d9d";
-                  (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
+                  if (!showDropdown) {
+                    (e.currentTarget as HTMLElement).style.color = "#9d9d9d";
+                    (e.currentTarget as HTMLElement).style.backgroundColor = "transparent";
+                  }
                 }}
               >
-                {/*
-                  Real SIX uses: <span class="fa fa-user-circle-o fa-fw"></span>
-                  fa-user-circle-o = outlined user circle, fa-fw = fixed width
-                  This renders as a thin circle outline with user silhouette inside
-                */}
-                <i
-                  className="fa fa-user-circle-o fa-fw"
-                  style={{ fontSize: 16 }}
-                />
+                <i className="fa fa-user-circle-o fa-fw" style={{ fontSize: 16 }} />
                 {userName}
-                {/* Bootstrap native <span class="caret"> */}
-                <span
-                  style={{
-                    display: "inline-block",
-                    width: 0,
-                    height: 0,
-                    marginLeft: 2,
-                    verticalAlign: "middle",
-                    borderTop: "4px dashed",
-                    borderRight: "4px solid transparent",
-                    borderLeft: "4px solid transparent",
-                  }}
-                />
+                {onLogout && (
+                  <span style={{
+                    display: "inline-block", width: 0, height: 0, marginLeft: 2,
+                    verticalAlign: "middle", borderTop: "4px dashed",
+                    borderRight: "4px solid transparent", borderLeft: "4px solid transparent",
+                  }} />
+                )}
               </button>
-            </li>
+
+              {/* Dropdown menu */}
+              {showDropdown && (
+                <>
+                  {/* Overlay untuk close saat klik luar */}
+                  <div
+                    style={{ position: "fixed", inset: 0, zIndex: 1029 }}
+                    onClick={() => setShowDropdown(false)}
+                  />
+                  <ul style={{
+                    position: "absolute", top: 50, right: 0, zIndex: 1030,
+                    background: "#fff",
+                    border: "1px solid rgba(0,0,0,0.15)",
+                    borderRadius: "0 0 4px 4px",
+                    minWidth: 150,
+                    listStyle: "none", margin: 0, padding: "5px 0",
+                    boxShadow: "0 6px 12px rgba(0,0,0,0.175)",
+                  }}>
+                    {onLogout && (
+                      <li>
+                        <button type="button"
+                          onClick={() => { setShowDropdown(false); onLogout(); }}
+                          style={{
+                            width: "100%", padding: "3px 20px", textAlign: "left",
+                            background: "transparent", border: "none", fontSize: 14,
+                            cursor: "pointer", color: "#333", fontFamily: "'Roboto', sans-serif",
+                            display: "flex", alignItems: "center", gap: 8,
+                            lineHeight: "1.42857",
+                          }}
+                          onMouseEnter={(e) => {
+                            (e.currentTarget as HTMLElement).style.background = "#f5f5f5";
+                            (e.currentTarget as HTMLElement).style.color = "#262626";
+                          }}
+                          onMouseLeave={(e) => {
+                            (e.currentTarget as HTMLElement).style.background = "transparent";
+                            (e.currentTarget as HTMLElement).style.color = "#333";
+                          }}
+                        >
+                          <i className="fa fa-fw fa-sign-out" />
+                          Logout
+                        </button>
+                      </li>
+                    )}
+                  </ul>
+                </>
+              )}
+            </li>}
           </ul>
         </div>
       </div>

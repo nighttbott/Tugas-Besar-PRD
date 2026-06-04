@@ -20,11 +20,10 @@ using namespace websockets;
 // ─────────────────────────────────────────────────────────────────────────────
 // CONFIGURATION
 // ─────────────────────────────────────────────────────────────────────────────
-static const char* WIFI_SSID     = "WIBUSOFT";
-static const char* WIFI_PASSWORD = "bilekbangetbang";
+#include "esp32_gate_config.h"
 
-static const char* WS_URL =
-    "ws://10.138.224.214:8000/ws/esp32/G1?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJlc3AzMl9nYXRlIiwiZ2F0ZV9pZCI6IkcxIiwiaXNzIjoiaXRiLXBhcmtpbmctYmFja2VuZCIsImlhdCI6MTc3OTA5NjA2MSwiZXhwIjoxNzgxNjg4MDYxfQ.PgEeQmgSs9FuOKcfyXXVUVj5QI5DYXpz8vxUj2CY_-s";
+// WS_URL di-build otomatis — jangan edit manual
+static char WS_URL[128];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HARDWARE PINS
@@ -83,26 +82,30 @@ static void IRAM_ATTR gateAutoClose(void* /*arg*/) {
     gateOpen = false;
 }
 
+#define GATE_IDLE_CLOSE_MS 5000  // tutup setelah 5 detik tidak ada deteksi
+
 void openGate(uint32_t durationMs) {
+    // Selalu reset timer ke 5 detik dari sekarang
+    // (setiap deteksi baru memperpanjang waktu buka)
     if (gateOpen) {
-        Serial.println("[GATE] Already open — restarting timer.");
+        Serial.println("[GATE] Already open — resetting idle timer.");
         esp_timer_stop(gateTimer);
+    } else {
+        // Eksekusi hardware hanya kalau gate belum terbuka
+        gateServo.write(ANGLE_OPEN);
+        digitalWrite(LED_PIN, HIGH);
+        gateOpen = true;
+
+        // Buzzer 1 kali panjang
+        digitalWrite(BUZZER_PIN, HIGH);
+        delay(150);
+        digitalWrite(BUZZER_PIN, LOW);
+
+        Serial.println("[GATE] Gate OPENED.");
     }
 
-    // Eksekusi hardware (Servo + LED)
-    gateServo.write(ANGLE_OPEN);
-    digitalWrite(LED_PIN, HIGH);
-    gateOpen = true;
-
-    // Bunyi buzzer 1 kali panjang sebagai tanda gerbang dibuka
-    digitalWrite(BUZZER_PIN, HIGH);
-    delay(150); // Delay kecil (<200ms) tidak akan memutuskan koneksi WebSocket
-    digitalWrite(BUZZER_PIN, LOW);
-
-    Serial.printf("[GATE] Gate OPENED — will auto-close in %u ms\n", durationMs);
-    
-    // Jadwalkan penutupan gerbang
-    esp_timer_start_once(gateTimer, (uint64_t)durationMs * 1000ULL);
+    Serial.printf("[GATE] Idle close in %u ms\n", GATE_IDLE_CLOSE_MS);
+    esp_timer_start_once(gateTimer, (uint64_t)GATE_IDLE_CLOSE_MS * 1000ULL);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -251,6 +254,9 @@ void setup() {
         Serial.println("[WiFi] Retrying in 5s...");
         delay(5000);
     }
+    snprintf(WS_URL, sizeof(WS_URL),
+        "ws://%s:8000/ws/esp32/%s?device_key=%s",
+        SERVER_IP, GATE_ID, DEVICE_KEY);
     connectWebSocket();
 }
 

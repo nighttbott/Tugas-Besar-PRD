@@ -10,6 +10,7 @@
 
 import Image from "next/image";
 import { useState, useMemo } from "react";
+import type { Vehicle } from "@/lib/api";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -66,27 +67,13 @@ interface Ewallet {
   is_primary:     boolean;
 }
 
-export interface VehicleData {
-  plate_normalized: string;
-  plate_raw:        string;
-  nim:              string;
-  owner:            string;
-  vehicle_type:     string;
-  model:            string;
-  status:           string;
-  anpr_verified:    boolean;
-  ewallets:         Ewallet[];
-  is_parked:        boolean;
-}
-
 interface VehicleCardProps {
-  vehicle:    VehicleData;
-  token:      string | null;
+  vehicle:    Vehicle;
   onUpdated?: () => void | Promise<void>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export function VehicleCard({ vehicle, token, onUpdated }: VehicleCardProps) {
+export function VehicleCard({ vehicle, onUpdated }: VehicleCardProps) {
   // ── E-wallet panel state ───────────────────────────────────────────────────
   const [showEwallet,     setShowEwallet]     = useState(false);
   const [busy,            setBusy]            = useState(false);
@@ -114,24 +101,33 @@ export function VehicleCard({ vehicle, token, onUpdated }: VehicleCardProps) {
     return stillAvailable?.name ?? availableToAdd[0]?.name ?? "";
   }, [availableToAdd, selectedProvider]);
 
-  const headers = {
-    "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
+
   const plate = vehicle.plate_normalized;
 
   // Badge logic: "Aktif" only when BOTH verified AND active
-  const displayActive  = vehicle.status === "active" && vehicle.anpr_verified;
+  const displayActive  = vehicle.status === "active" && vehicle.verification_status === "verified";
   const displayBlocked = vehicle.status === "blocked";
 
   // ── Generic API call ───────────────────────────────────────────────────────
   async function api(method: string, path: string, body?: object) {
+    const { getToken } = await import("@/lib/api");
+    const t = await getToken();
+    
     const res = await fetch(`${API}/api/v1/vehicles/${path}`, {
-      method, headers,
+      method,
+      headers: new Headers({
+        "Content-Type": "application/json",
+        ...(t ? { "Authorization": `Bearer ${t}` } : {}),
+      }),
       body: body ? JSON.stringify(body) : undefined,
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.detail ?? "Terjadi kesalahan.");
+    if (!res.ok) console.error("API error:", JSON.stringify(data));
+    if (!res.ok) throw new Error(
+      typeof data.detail === "string"
+        ? data.detail
+        : JSON.stringify(data.detail) ?? "Terjadi kesalahan."
+    );
     return data;
   }
 
@@ -196,7 +192,7 @@ export function VehicleCard({ vehicle, token, onUpdated }: VehicleCardProps) {
     run(() =>
       api("POST", `${plate}/ewallet`, {
         provider:        addProvider,
-        masked_account:  addAccount || undefined,
+        masked_account:  addAccount || "",
         initial_balance: parseInt(addBalance) || 0,
         set_as_primary:  addPrimary,
       }).then(() => { setAddAccount(""); setAddBalance("100000"); setAddPrimary(false); setSelectedProvider(""); })
@@ -352,10 +348,12 @@ export function VehicleCard({ vehicle, token, onUpdated }: VehicleCardProps) {
                   ) : (
                     <> &bull; <span style={{ color: "#c0392b" }}>Belum ada e-wallet</span></>
                   )}
-                  {vehicle.anpr_verified ? (
-                    <> &bull; <span style={{ color: "#27ae60" }}>ANPR Terverifikasi ✓</span></>
+                  {vehicle.verification_status === "verified" ? (
+                    <> &bull; <span style={{ color: "#27ae60" }}>✓ Terverifikasi</span></>
+                  ) : vehicle.verification_status === "flagged" ? (
+                    <> &bull; <span style={{ color: "#c0392b" }}>⚠ Ditandai — {vehicle.flag_reason ?? ""}</span></>
                   ) : (
-                    <> &bull; <span style={{ color: "#e67e22" }}>Belum Terverifikasi ANPR</span></>
+                    <> &bull; <span style={{ color: "#e67e22" }}>⏳ Menunggu verifikasi fisik</span></>
                   )}
                 </div>
               </div>

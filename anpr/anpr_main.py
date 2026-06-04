@@ -41,12 +41,12 @@ log = logging.getLogger("anpr")
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
-API_ENDPOINT   = os.environ.get("API_ENDPOINT",   "http://localhost:8000/api/v1/gate/trigger")
-API_SECRET_KEY = os.environ.get("API_SECRET_KEY", "REPLACE_WITH_REAL_JWT_TOKEN")
-
-GATE_ID        = os.environ.get("GATE_ID",        "G1")
-GATE_DIRECTION = os.environ.get("GATE_DIRECTION", "entry")
-CAMERA_INDEX   = int(os.environ.get("CAMERA_INDEX", "0"))
+GATE_ID        = os.environ.get("GATE_ID",        "G1").strip()
+GATE_DIRECTION = os.environ.get("GATE_DIRECTION", "entry").strip()
+_cam_index_raw = os.environ.get("CAMERA_INDEX", "0").strip()
+CAMERA_INDEX   = _cam_index_raw if _cam_index_raw.startswith("http") else int(_cam_index_raw)
+API_ENDPOINT   = os.environ.get("API_ENDPOINT", "http://localhost:8000/api/v1/gate/trigger").strip()
+ANPR_KEY       = os.environ.get("ANPR_KEY", "local-anpr-secret").strip()
 
 FRAME_WIDTH    = 1280
 FRAME_HEIGHT   = 720
@@ -98,7 +98,7 @@ async def _get_session() -> aiohttp.ClientSession:
     global _http_session
     if _http_session is None or _http_session.closed:
         _http_session = aiohttp.ClientSession(
-            headers={"Authorization": f"Bearer {API_SECRET_KEY}"},
+            headers={"X-ANPR-KEY": ANPR_KEY},
             timeout=aiohttp.ClientTimeout(total=3.0, connect=1.0),
         )
     return _http_session
@@ -237,7 +237,7 @@ cv2.namedWindow("ALPR — ITB Jatinangor", cv2.WINDOW_NORMAL)
 cv2.resizeWindow("ALPR — ITB Jatinangor", FRAME_WIDTH, FRAME_HEIGHT)
 
 log.info(
-    "ANPR started | gate=%s | dir=%s | camera=%d | endpoint=%s",
+    "ANPR started | gate=%s | dir=%s | camera=%s | endpoint=%s",
     GATE_ID, GATE_DIRECTION, CAMERA_INDEX, API_ENDPOINT,
 )
 log.info("Press ESC to exit.")
@@ -249,7 +249,7 @@ try:
     while True:
         ret, frame = cap.read()
         if not ret:
-            log.error("Failed to read frame from camera %d.", CAMERA_INDEX)
+            log.error("Failed to read frame from camera %s.", CAMERA_INDEX)
             break
 
         results = yolo(frame, verbose=False)
