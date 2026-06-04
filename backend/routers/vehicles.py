@@ -15,7 +15,8 @@ import re
 import time
 from datetime import datetime, timezone
 from typing import Annotated, Literal
-
+from core.security import create_jwt
+from core.config import get_settings, Settings
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, field_validator
 
@@ -107,13 +108,38 @@ async def verify_anpr(
         "status":        vehicle["status"],
     }
 
+class UserLoginRequest(BaseModel):
+    nim:      str = Field(..., min_length=5)
+    password: str = Field(..., min_length=4)
+
+@router.post("/auth/login", summary="User login → JWT")
+async def user_login(
+    req: UserLoginRequest,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    user = USER_DB.get(req.nim)
+    if not user or user["password"] != req.password:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                            detail="NIM atau password salah.")
+    token = create_jwt(
+        sub="dashboard_user",
+        extra={"nim": req.nim, "name": user["name"]},
+        ttl_hours=8,
+        settings=settings,
+    )
+    return {
+        "access_token": token,
+        "token_type":   "bearer",
+        "nim":          req.nim,
+        "name":         user["name"],
+    }
 
 # ── GET /api/v1/vehicles/ ─────────────────────────────────────────────────────
 @router.get("/", summary="List all vehicles for NIM")
 async def list_vehicles(
-    nim: str = "2021184750",
-    _: Annotated[dict, Depends(require_dashboard_token)] = None,
+    token_payload: Annotated[dict, Depends(require_dashboard_token)],
 ) -> list[dict]:
+    nim = token_payload.get("nim", "")
     result = []
     for key, v in VEHICLE_DB.items():
         if v.get("nim") != nim:
@@ -128,12 +154,14 @@ async def list_vehicles(
             "vehicle_type":     v["vehicle_type"],
             "model":            v["model"],
             "status":           v["status"],
-            "anpr_verified":    v["anpr_verified"],
             "ewallets":         ewallets,
             "primary_ewallet":  next((e for e in ewallets if e["is_primary"]), ewallets[0] if ewallets else None),
             "backup_ewallet":   next((e for e in ewallets if not e["is_primary"]), None),
             "is_parked":        session is not None,
             "active_session":   session,
+            "anpr_verified":    v.get("anpr_verified", False),
+            "verification_status": v.get("verification_status", "verified"),
+            "flag_reason":      v.get("flag_reason"),
         })
     return result
 
@@ -142,21 +170,36 @@ async def list_vehicles(
 @router.post("/", status_code=status.HTTP_201_CREATED)
 async def add_vehicle(
     req: AddVehicleRequest,
-    _: Annotated[dict, Depends(require_dashboard_token)] = None,
+    token_payload: Annotated[dict, Depends(require_dashboard_token)],
 ) -> dict:
+    nim   = token_payload.get("nim", req.nim)
+    owner = owner = token_payload.get("name") or token_payload.get("nim", "User")
     key = req.plate_number
+    # Cek duplikat — plat sudah ada di NIM sendiri
     if key in VEHICLE_DB:
-        raise HTTPException(status.HTTP_409_CONFLICT,
-                            detail=f"Plat {fmt_plate(key)} sudah terdaftar.")
+        existing = VEHICLE_DB[key]
+        if existing.get("nim") == req.nim:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                detail=f"Plat {fmt_plate(key)} sudah terdaftar di akun Anda.")
+        else:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                                detail=f"Plat {fmt_plate(key)} sudah terdaftar oleh pengguna lain. "
+                                       f"Jika ini kendaraan Anda, hubungi admin untuk transfer kepemilikan.")
+
     VEHICLE_DB[key] = {
-        "plate_raw":    fmt_plate(key),
-        "nim":          req.nim,
-        "owner":        "Muhammad Abduh",
-        "vehicle_type": req.vehicle_type,
-        "model":        req.model,
-        "status":       "inactive",
-        "anpr_verified": False,
-        "ewallets":     [],
+        "plate_raw":                fmt_plate(key),
+        "nim":                      nim,
+        "owner":                    owner,
+        "vehicle_type":             req.vehicle_type,
+        "model":                    req.model,
+        "status":                   "inactive",
+        "verification_status":      "pending",
+        "verified_at":              None,
+        "verified_gate":            None,
+        "verification_confidence":  None,
+        "flag_reason":              None,
+        "registered_at":            datetime.now(timezone.utc).isoformat(),
+        "ewallets":                 [],
     }
     save_vehicle_db()
     return {"message": f"Kendaraan {fmt_plate(key)} berhasil didaftarkan.", "plate_raw": fmt_plate(key)}
@@ -181,9 +224,9 @@ async def delete_vehicle(
 # ── GET /api/v1/vehicles/sessions ────────────────────────────────────────────
 @router.get("/sessions")
 async def get_sessions_stats(
-    nim: str = "2021184750",
-    _: Annotated[dict, Depends(require_dashboard_token)] = None,
+    token_payload: Annotated[dict, Depends(require_dashboard_token)],
 ) -> dict:
+    nim = token_payload.get("nim", "")
     user_vehicles = {k: v for k, v in VEHICLE_DB.items() if v.get("nim") == nim}
     active_sessions = []
 
@@ -214,7 +257,12 @@ async def get_sessions_stats(
         })
 
     today = datetime.now(timezone.utc).date().isoformat()
-    today_done = [s for s in HISTORY_DB if s.get("entry_time", "").startswith(today)]
+    user_plates = set(user_vehicles.keys())
+    today_done = [
+        s for s in HISTORY_DB
+        if s.get("entry_time", "").startswith(today)
+        and s.get("plate") in user_plates
+    ]
 
     return {
         "total_vehicles":   len(user_vehicles),
@@ -410,3 +458,10 @@ async def verify_anpr(
         "anpr_verified": True,
         "status":        vehicle["status"],
     }
+
+# ── Hardcoded user credentials (demo) ────────────────────────────────────────
+USER_DB = {
+    "13525001": {"password": "mahasiswa1", "name": "Michael Abduh"},
+    "13525002": {"password": "mahasiswa2", "name": "Danesh Zacky"},
+    "13525003": {"password": "mahasiswa3", "name": "Naufal Salastra"},
+}

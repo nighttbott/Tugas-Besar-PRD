@@ -16,16 +16,16 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     # ── Security ─────────────────────────────────────────────────────────────
-    # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
     JWT_SECRET_KEY: str = "CHANGE_ME_IN_PRODUCTION_USE_32_BYTE_HEX"
-    JWT_ALGORITHM: str = "HS256"
+    JWT_ALGORITHM:  str = "HS256"
+    DEBUG:          bool = False
 
-    # Static long-lived token issued to the ANPR edge script.
-    # Rotate this periodically. Store in env variable on the camera PC.
-    ANPR_SERVICE_TOKEN: str = "CHANGE_ME_ANPR_TOKEN"
+    # ANPR shared secret — set sama di backend .env dan anpr/.env
+    ANPR_KEY: str = "local-anpr-secret"
 
-    # Optional: token for the ESP32 WebSocket connection (query param)
-    ESP32_GATE_TOKEN: str = "CHANGE_ME_ESP32_TOKEN"
+    # ESP32 device keys — format JSON string: {"G1":"key-g1","EXIT1":"key-exit1"}
+    # Di .env tulis satu baris: ESP32_DEVICE_KEYS={"G1":"esp32-secret-g1"}
+    ESP32_DEVICE_KEYS: str = '{"G1":"esp32-secret-g1"}'
 
     # ── Redis ─────────────────────────────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379/0"

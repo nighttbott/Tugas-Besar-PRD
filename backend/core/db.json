@@ -1,12 +1,56 @@
 {
   "D4321ITB": {
     "plate_raw": "D 4321 ITB",
-    "nim": "2021184750",
-    "owner": "Muhammad Abduh",
+    "nim": "13525001",
+    "owner": "Michael Abduh",
     "vehicle_type": "motor",
     "model": "Honda Beat",
     "status": "active",
-    "anpr_verified": true,
+    "verification_status": "verified",
+    "verified_at": "2025-01-01T00:00:00+00:00",
+    "verified_gate": "G1",
+    "verification_confidence": 0.95,
+    "flag_reason": null,
+    "ewallets": [
+      {
+        "provider": "GoPay",
+        "balance": 100000,
+        "masked_account": "08xx-xxxx-xxxx",
+        "is_primary": true
+      }
+    ]
+  },
+  "D9876KW": {
+    "plate_raw": "D 9876 KW",
+    "nim": "13525002",
+    "owner": "Danesh Zacky",
+    "vehicle_type": "motor",
+    "model": "Yamaha NMAX",
+    "status": "active",
+    "verification_status": "pending",
+    "verified_at": null,
+    "verified_gate": null,
+    "verification_confidence": null,
+    "flag_reason": null,
+    "ewallets": [],
+    "transferred_by": "admin",
+    "transferred_at": "2026-05-24T04:10:42.542512+00:00",
+    "transfer_reason": "",
+    "previous_owner": "Michael Abduh (NIM: 13525001)"
+  },
+  "D1111AC": {
+    "plate_raw": "D 1111 AC",
+    "nim": "13525001",
+    "owner": "Michael Abduh",
+    "vehicle_type": "motor",
+    "model": "Beat",
+    "status": "active",
+    "verification_status": "pending",
+    "verified_at": null,
+    "verified_gate": null,
+    "verification_confidence": null,
+    "flag_reason": null,
+    "registered_at": "2026-05-24T04:27:54.179356+00:00",
     "ewallets": [
       {
         "provider": "GoPay",
@@ -19,98 +63,30 @@
         "balance": 100000,
         "masked_account": "08xx-xxxx-xxxx",
         "is_primary": false
-      },
-      {
-        "provider": "ShopeePay",
-        "balance": 100000,
-        "masked_account": "08xx-xxxx-xxxx",
-        "is_primary": false
-      },
-      {
-        "provider": "Dana",
-        "balance": 100000,
-        "masked_account": "08xx-xxxx-xxxx",
-        "is_primary": false
-      }
-    ]
-  },
-  "D9876KW": {
-    "plate_raw": "D 9876 KW",
-    "nim": "2021184750",
-    "owner": "Muhammad Abduh",
-    "vehicle_type": "motor",
-    "model": "Yamaha NMAX",
-    "status": "active",
-    "anpr_verified": true,
-    "ewallets": [],
-    "anpr_verified_by": "Admin Parkir",
-    "anpr_verified_at": "2026-05-14T10:24:48.412724+00:00",
-    "anpr_notes": ""
-  },
-  "F6797OB": {
-    "plate_raw": "F 6797 OB",
-    "nim": "2021184750",
-    "owner": "Muhammad Abduh",
-    "vehicle_type": "motor",
-    "model": "ADV",
-    "status": "active",
-    "anpr_verified": true,
-    "ewallets": [
-      {
-        "provider": "GoPay",
-        "balance": 87000,
-        "masked_account": "08xx-xxxx-xxxx",
-        "is_primary": true
       }
     ],
-    "anpr_verified_by": "Admin Parkir",
-    "anpr_verified_at": "2026-05-14T10:28:23.975801+00:00",
-    "anpr_notes": ""
+    "transferred_by": "admin",
+    "transferred_at": "2026-05-24T04:29:20.949198+00:00",
+    "transfer_reason": "",
+    "previous_owner": "Danesh Zacky (NIM: 13525002)"
   },
-  "B6716VRZ": {
-    "plate_raw": "B 6716 VRZ",
-    "nim": "2021184750",
-    "owner": "Muhammad Abduh",
+  "BK1234AB": {
+    "plate_raw": "BK 1234 AB",
+    "nim": "13525001",
+    "owner": "Michael Abduh",
     "vehicle_type": "motor",
-    "model": "VARIO",
+    "model": "Pakrio",
     "status": "active",
-    "anpr_verified": true,
+    "verification_status": "verified",
+    "verified_at": "2026-05-25T07:59:49.396249+00:00",
+    "verified_gate": "G1",
+    "verification_confidence": 0.8,
+    "flag_reason": null,
+    "registered_at": "2026-05-25T07:36:16.819278+00:00",
     "ewallets": [],
-    "anpr_verified_by": "Admin Parkir",
-    "anpr_verified_at": "2026-05-14T11:37:51.341200+00:00",
-    "anpr_notes": ""
-  },
-  "B1387DKC": {
-    "plate_raw": "B 1387 DKC",
-    "nim": "2021184750",
-    "owner": "Muhammad Abduh",
-    "vehicle_type": "mobil",
-    "model": "Avanza",
-    "status": "active",
-    "anpr_verified": true,
-    "ewallets": [
-      {
-        "provider": "GoPay",
-        "balance": 96000,
-        "masked_account": "08xx-xxxx-xxxx",
-        "is_primary": true
-      }
-    ],
-    "anpr_verified_by": "Admin Parkir",
-    "anpr_verified_at": "2026-05-18T07:34:27.121380+00:00",
-    "anpr_notes": ""
-  },
-  "BD2541WH": {
-    "plate_raw": "BD 2541 WH",
-    "nim": "2021184750",
-    "owner": "Muhammad Abduh",
-    "vehicle_type": "motor",
-    "model": "Astrea",
-    "status": "active",
-    "anpr_verified": true,
-    "ewallets": [],
-    "anpr_verified_by": "Admin Parkir",
-    "anpr_verified_at": "2026-05-18T10:57:09.332431+00:00",
-    "anpr_notes": ""
+    "transferred_by": "admin",
+    "transferred_at": "2026-05-25T07:59:32.707393+00:00",
+    "transfer_reason": "",
+    "previous_owner": "Danesh Zacky (NIM: 13525002)"
   }
 }

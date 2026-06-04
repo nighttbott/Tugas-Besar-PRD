@@ -1,7 +1,3 @@
-/**
- * hooks/useGateEvents.ts
- * WebSocket hook with optional onEvent callback for parent refresh.
- */
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -20,7 +16,6 @@ interface UseGateEventsReturn {
 }
 
 export function useGateEvents(
-  token: string | null,
   onEvent?: (event: GateEvent) => void,
 ): UseGateEventsReturn {
   const [events, setEvents]             = useState<GateEvent[]>([]);
@@ -33,23 +28,26 @@ export function useGateEvents(
   const onEventRef   = useRef(onEvent);
   onEventRef.current = onEvent;
 
-  const connect = useCallback(() => {
-    if (!token || !mountedRef.current) return;
+  const connect = useCallback(async () => {
+    if (!mountedRef.current) return;
+    const url = await buildGateEventsWsUrl();
+    if (!url.includes("token=") || url.endsWith("token=")) {
+      // Token belum ready, retry setelah 1s
+      retryTimer.current = setTimeout(connect, 1000);
+      return;
+    }
     setConnState("connecting");
 
-    const url = buildGateEventsWsUrl(token);
     const ws  = new WebSocket(url);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      // ✨ PERBAIKAN: Pastikan hantu StrictMode lama tidak ikut mengubah state
       if (wsRef.current !== ws) { ws.close(); return; }
       setConnState("connected");
       retryDelay.current = INITIAL_DELAY;
     };
 
     ws.onmessage = (event) => {
-      // ✨ PERBAIKAN: Jika socket ini bukan socket utama yang aktif, abaikan pesannya!
       if (wsRef.current !== ws) return;
       try {
         const data = JSON.parse(event.data as string) as GateEvent;
@@ -63,7 +61,6 @@ export function useGateEvents(
     };
 
     ws.onclose = () => {
-      // ✨ PERBAIKAN: Jangan biarkan hantu socket lama memicu timer reconnect baru
       if (wsRef.current !== ws) return;
       setConnState("disconnected");
       retryTimer.current = setTimeout(() => {
@@ -71,7 +68,7 @@ export function useGateEvents(
         connect();
       }, retryDelay.current);
     };
-  }, [token]);
+  }, []); // ← kosong, tidak ada dependency eksternal
 
   useEffect(() => {
     mountedRef.current = true;
@@ -80,7 +77,7 @@ export function useGateEvents(
       mountedRef.current = false;
       if (retryTimer.current) clearTimeout(retryTimer.current);
       wsRef.current?.close();
-      wsRef.current = null; // ✨ PERBAIKAN: Kosongkan ref saat unmount total
+      wsRef.current = null;
     };
   }, [connect]);
 
@@ -95,4 +92,4 @@ export function useGateEvents(
   }, []);
 
   return { events, connectionState, latestEvent: events[0] ?? null };
-}
+} 

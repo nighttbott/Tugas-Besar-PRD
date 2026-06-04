@@ -1,37 +1,38 @@
 """
 core/security.py
-Bearer-token validation for two distinct clients:
-  1. ANPR script  → static pre-shared JWT (issued offline, long TTL)
-  2. ESP32 firmware → WebSocket query-param token (short TTL, rotatable)
-
-Using python-jose for JWT; no database round-trip on validation
-→ sub-millisecond overhead, safe for real-time gate trigger path.
+Auth untuk tiga client:
+  1. ANPR script      → X-ANPR-KEY header (shared secret)
+  2. ESP32 firmware   → ?device_key=xxx query param
+  3. Dashboard/Admin  → Bearer JWT (dev-login atau manual)
 """
+import json
 from datetime import datetime, timezone, timedelta
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 
 from .config import get_settings, Settings
 
-# ── FastAPI dependency: extract Bearer header ─────────────────────────────────
 _bearer_scheme = HTTPBearer(auto_error=True)
 
 
-def _decode_token(token: str, settings: Settings) -> dict:
-    """
-    Decode and verify a JWT. Raises HTTP 401 on any failure.
-    Keeps error messages intentionally vague to prevent oracle attacks.
-    """
+# ── JWT helpers ───────────────────────────────────────────────────────────────
+
+def verify_esp32_device_key(device_key: str, settings: Settings) -> bool:
     try:
-        payload = jwt.decode(
-            token,
-            settings.JWT_SECRET_KEY,
-            algorithms=[settings.JWT_ALGORITHM],
-        )
-        return payload
+        keys: dict = json.loads(settings.ESP32_DEVICE_KEYS)
+    except Exception:
+        return False
+    print(f"[DEBUG] device_key received: {repr(device_key)}")
+    print(f"[DEBUG] known keys: {list(keys.values())}")
+    print(f"[DEBUG] match: {device_key in keys.values()}")
+    return device_key in keys.values()
+
+def _decode_token(token: str, settings: Settings) -> dict:
+    try:
+        return jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -40,139 +41,53 @@ def _decode_token(token: str, settings: Settings) -> dict:
         )
 
 
-def require_anpr_token(
-    credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer_scheme)],
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> dict:
-    """
-    FastAPI dependency for the POST /gate/trigger endpoint.
-    Validates the static ANPR service token and checks the 'sub' claim.
-    """
-    payload = _decode_token(credentials.credentials, settings)
-
-    # Enforce service identity — the ANPR script must carry sub="anpr_service"
-    if payload.get("sub") != "anpr_service":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: token does not have gate-trigger permission.",
-        )
-    return payload
+def create_jwt(sub: str, extra: dict, ttl_hours: float, settings: Settings) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {"sub": sub, "iss": "itb-parking-backend", "iat": now,
+               "exp": now + timedelta(hours=ttl_hours), **extra}
+    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
-def verify_esp32_token(token: str, settings: Settings) -> bool:
-    """
-    Lightweight check used in the ESP32 WebSocket handshake.
-    Returns True/False (caller decides whether to close the socket).
-    """
+# ── ANPR: shared secret via header ───────────────────────────────────────────
+
+def require_anpr_key(
+    x_anpr_key: Annotated[str | None, Header(alias="X-ANPR-KEY")] = None,
+    settings: Settings = Depends(get_settings),
+) -> None:
+    if not x_anpr_key or x_anpr_key != settings.ANPR_KEY:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Invalid or missing X-ANPR-KEY.")
+
+
+# ── ESP32: device_key query param ─────────────────────────────────────────────
+
+def verify_esp32_device_key(device_key: str, settings: Settings) -> bool:
     try:
-        payload = jwt.decode(
-            token,
-            settings.JWT_SECRET_KEY,
-            algorithms=[settings.JWT_ALGORITHM],
-        )
-        return payload.get("sub") == "esp32_gate"
-    except JWTError:
+        keys: dict = json.loads(settings.ESP32_DEVICE_KEYS)
+    except Exception:
         return False
+    return device_key in keys.values()
 
 
-# ── Token generation utilities (run once, offline) ───────────────────────────
-def create_anpr_service_token(settings: Settings) -> str:
-    """
-    Generate the long-lived JWT for the ANPR edge script.
-    Run this ONCE and store the output as ANPR_SERVICE_TOKEN in .env.
-    
-    Usage:
-        python -c "
-        from core.config import get_settings
-        from core.security import create_anpr_service_token
-        print(create_anpr_service_token(get_settings()))
-        "
-    """
-    payload = {
-        "sub": "anpr_service",
-        "iss": "itb-parking-backend",
-        "iat": datetime.now(timezone.utc),
-        # 1-year expiry; rotate annually or on suspected compromise
-        "exp": datetime.now(timezone.utc) + timedelta(days=365),
-    }
-    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
-
-
-def create_esp32_gate_token(gate_id: str, settings: Settings) -> str:
-    """Generate a short-lived (30-day) token for an ESP32 gate unit."""
-    payload = {
-        "sub": "esp32_gate",
-        "gate_id": gate_id,
-        "iss": "itb-parking-backend",
-        "iat": datetime.now(timezone.utc),
-        "exp": datetime.now(timezone.utc) + timedelta(days=30),
-    }
-    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
-
+# ── Dashboard JWT ─────────────────────────────────────────────────────────────
 
 def require_dashboard_token(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer_scheme)],
-    settings: Annotated[Settings, Depends(get_settings)],
+    settings: Settings = Depends(get_settings),
 ) -> dict:
-    """
-    FastAPI dependency for dashboard API calls (vehicle CRUD, session stats).
-    Accepts tokens with sub = 'dashboard_user' OR 'anpr_service' (for testing).
-    """
     payload = _decode_token(credentials.credentials, settings)
-    allowed = {"dashboard_user", "anpr_service"}
-    if payload.get("sub") not in allowed:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: insufficient permission.",
-        )
+    if payload.get("sub") not in {"dashboard_user", "parking_admin"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Forbidden: insufficient permission.")
     return payload
-
-
-def create_dashboard_token(nim: str, settings: Settings) -> str:
-    """Generate a session-scoped dashboard JWT for a logged-in student."""
-    payload = {
-        "sub": "dashboard_user",
-        "nim": nim,
-        "iss": "itb-parking-backend",
-        "iat": datetime.now(timezone.utc),
-        "exp": datetime.now(timezone.utc) + timedelta(hours=8),
-    }
-    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
 def require_admin_token(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(_bearer_scheme)],
-    settings: Annotated[Settings, Depends(get_settings)],
+    settings: Settings = Depends(get_settings),
 ) -> dict:
-    """
-    FastAPI dependency for admin-only endpoints (ANPR verification, etc.).
-    Only tokens with sub = 'parking_admin' are accepted.
-    """
     payload = _decode_token(credentials.credentials, settings)
     if payload.get("sub") != "parking_admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: admin access required.",
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Forbidden: admin access required.")
     return payload
-
-
-def create_admin_token(admin_id: str, settings: Settings) -> str:
-    """
-    Generate an admin JWT. Run once, store in backend .env as ADMIN_TOKEN.
-
-    Usage:
-        python -c "
-        from core.config import get_settings
-        from core.security import create_admin_token
-        print(create_admin_token('admin_parkir', get_settings()))
-        "
-    """
-    payload = {
-        "sub":      "parking_admin",
-        "admin_id": admin_id,
-        "iss":      "itb-parking-backend",
-        "iat":      datetime.now(timezone.utc),
-        "exp":      datetime.now(timezone.utc) + timedelta(days=365),
-    }
-    return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)

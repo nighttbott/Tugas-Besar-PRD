@@ -3,7 +3,7 @@
  * Admin panel with:
  *   - ANPR verify / revoke
  *   - Plate number change (resets ANPR verification, requires re-verify)
- *   - Search + filter
+ *   - Search                       filter
  *   - Stat cards
  */
 "use client";
@@ -21,9 +21,24 @@ interface AdminVehicle {
   vehicle_type:     string;
   model:            string;
   status:           string;
-  anpr_verified:    boolean;
+  verification_status: "pending" | "verified" | "flagged" | "blocked";
+  verified_at:         string | null;
+  verified_gate:       string | null;
+  flag_reason:         string | null;
   is_parked:        boolean;
   ewallets:         { provider: string; balance: number; is_primary: boolean }[];
+}
+
+interface ActiveSession {
+  plate:          string;
+  gate_id:        string;
+  gate_location:  string;
+  entry_time:     string;
+  is_guest:       boolean;
+  exit_approved:  boolean;
+  owner:          string;
+  model:          string;
+  needs_manual_payment?: boolean;
 }
 
 // ── API helper ────────────────────────────────────────────────────────────────
@@ -140,53 +155,42 @@ function LoginScreen({ onLogin }: { onLogin: (token: string, adminId: string) =>
 function AdminVehicleRow({
   vehicle, token, onUpdated,
 }: { vehicle: AdminVehicle; token: string; onUpdated: () => void }) {
-  const [busy,       setBusy]       = useState(false);
-  const [msg,        setMsg]        = useState<{ ok: boolean; text: string } | null>(null);
-  const [notes,      setNotes]      = useState("");
-
-  // Plate change state
-  const [showPlate,  setShowPlate]  = useState(false);
-  const [newPlate,   setNewPlate]   = useState("");
-  const [plateErr,   setPlateErr]   = useState<string | null>(null);
+  const [busy,        setBusy]        = useState(false);
+  const [msg,         setMsg]         = useState<{ ok: boolean; text: string } | null>(null);
+  const [showPlate,   setShowPlate]   = useState(false);
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [newNim,      setNewNim]      = useState("");
+  const [newOwner,    setNewOwner]    = useState("");
+  const [transferReason, setTransferReason] = useState("");
+  const [newPlate,    setNewPlate]    = useState("");
+  const [plateErr,    setPlateErr]    = useState<string | null>(null);
   const [plateReason, setPlateReason] = useState("");
+  const [forceTransfer, setForceTransfer] = useState(false);
 
-  const run = async (fn: () => Promise<void>) => {
+  const handleTransfer = async () => {
+    if (!newNim || !newOwner) { setMsg({ ok: false, text: "NIM dan nama wajib diisi." }); return; }
+    if (!confirm(`Transfer ${vehicle.plate_raw} ke ${newOwner} (${newNim})?`)) return;
     setBusy(true); setMsg(null);
-    try { await fn(); onUpdated(); }
-    catch (e: unknown) { setMsg({ ok: false, text: e instanceof Error ? e.message : "Error." }); }
-    finally { setBusy(false); }
-  };
-
-  const handleVerify = () =>
-    run(() =>
-      apiFetch(`/api/v1/admin/vehicles/${vehicle.plate_normalized}/verify-anpr`, token, "POST",
-        { verified_by: "Admin Parkir", notes })
-        .then((d) => setMsg({ ok: true, text: d.message }))
-    );
-
-  const handleUnverify = () => {
-    if (!confirm(`Cabut verifikasi ANPR untuk ${vehicle.plate_raw}?`)) return;
-    run(() =>
-      apiFetch(`/api/v1/admin/vehicles/${vehicle.plate_normalized}/unverify-anpr`, token, "POST")
-        .then((d) => setMsg({ ok: true, text: d.message }))
-    );
+    try {
+      const d = await apiFetch(
+        `/api/v1/admin/vehicles/${vehicle.plate_normalized}/transfer?force=${forceTransfer}`,
+        token, "POST",
+        { new_nim: newNim, new_owner: newOwner, reason: transferReason }
+      );
+      setMsg({ ok: true, text: d.message });
+      setShowTransfer(false); setNewNim(""); setNewOwner(""); setTransferReason("");
+      setForceTransfer(false);
+      onUpdated();
+    } catch (e: unknown) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : "Gagal transfer." });
+    } finally { setBusy(false); }
   };
 
   const handleChangePlate = async () => {
     const normalized = normalizePlate(newPlate);
-    if (!isValidPlate(newPlate)) {
-      setPlateErr("Format plat tidak valid. Contoh: D 1234 AB, B 5678 XYZ");
-      return;
-    }
-    if (normalized === vehicle.plate_normalized) {
-      setPlateErr("Plat baru sama dengan plat saat ini.");
-      return;
-    }
-    if (!confirm(
-      `Ubah plat ${vehicle.plate_raw} → ${newPlate.toUpperCase()}?\n\n` +
-      `Perhatian: ANPR verification akan direset. ` +
-      `Kendaraan perlu diverifikasi ulang dengan STNK baru.`
-    )) return;
+    if (!isValidPlate(newPlate)) { setPlateErr("Format plat tidak valid."); return; }
+    if (normalized === vehicle.plate_normalized) { setPlateErr("Plat baru sama dengan plat saat ini."); return; }
+    if (!confirm(`Ubah plat ${vehicle.plate_raw} → ${newPlate.toUpperCase()}?`)) return;
 
     setBusy(true); setMsg(null); setPlateErr(null);
     try {
@@ -195,21 +199,13 @@ function AdminVehicleRow({
         token, "PATCH",
         { new_plate: normalized, reason: plateReason }
       );
-      setMsg({ ok: true, text: d.message + " " + d.note });
-      setShowPlate(false);
-      setNewPlate("");
-      setPlateReason("");
+      setMsg({ ok: true, text: d.message });
+      setShowPlate(false); setNewPlate(""); setPlateReason("");
       onUpdated();
     } catch (e: unknown) {
       setMsg({ ok: false, text: e instanceof Error ? e.message : "Gagal mengubah plat." });
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
   };
-
-  const statusColor = vehicle.status === "active"   ? "#27ae60"
-                    : vehicle.status === "inactive"  ? "#e67e22"
-                    : "#e74c3c";
 
   return (
     <tr>
@@ -229,9 +225,7 @@ function AdminVehicleRow({
       {/* Vehicle */}
       <td>
         <div style={{ fontSize: 13 }}>{vehicle.model}</div>
-        <div style={{ fontSize: 11, color: "#888", textTransform: "capitalize" }}>
-          {vehicle.vehicle_type}
-        </div>
+        <div style={{ fontSize: 11, color: "#888", textTransform: "capitalize" }}>{vehicle.vehicle_type}</div>
       </td>
 
       {/* Status */}
@@ -239,15 +233,34 @@ function AdminVehicleRow({
         <span style={{
           display: "inline-block", padding: "2px 8px", borderRadius: 10,
           fontSize: 11, fontWeight: 600,
-          background: vehicle.status === "active"  ? "#dff0d8"
-                    : vehicle.status === "inactive" ? "#fcf8e3" : "#f2dede",
-          color: statusColor,
+          background: vehicle.status === "active" ? "#dff0d8" : vehicle.status === "inactive" ? "#fcf8e3" : "#f2dede",
+          color:      vehicle.status === "active" ? "#27ae60" : vehicle.status === "inactive" ? "#e67e22" : "#e74c3c",
         }}>
           {vehicle.status === "active" ? "Aktif" : vehicle.status === "inactive" ? "Belum Aktif" : "Diblokir"}
         </span>
         {vehicle.is_parked && (
           <span className="badge badge-blue" style={{ marginLeft: 6, fontSize: 10 }}>Parkir</span>
         )}
+        <div style={{ marginTop: 4 }}>
+          <span style={{
+            display: "inline-block", padding: "2px 7px", borderRadius: 10, fontSize: 10, fontWeight: 600,
+            background: vehicle.verification_status === "verified" ? "#dff0d8"
+                      : vehicle.verification_status === "flagged"  ? "#f2dede"
+                      : "#fcf8e3",
+            color:      vehicle.verification_status === "verified" ? "#27ae60"
+                      : vehicle.verification_status === "flagged"  ? "#c0392b"
+                      : "#e67e22",
+          }}>
+            {vehicle.verification_status === "verified" ? "✓ Verified"
+           : vehicle.verification_status === "flagged"  ? "⚠ Flagged"
+           : "⏳ Pending"}
+          </span>
+          {vehicle.verified_at && (
+            <div style={{ fontSize: 10, color: "#aaa", marginTop: 2 }}>
+              {new Date(vehicle.verified_at).toLocaleDateString("id-ID")} · {vehicle.verified_gate}
+            </div>
+          )}
+        </div>
       </td>
 
       {/* E-Wallet */}
@@ -265,130 +278,127 @@ function AdminVehicleRow({
         ))}
       </td>
 
-      {/* ANPR + Plate actions */}
+      {/* Ubah Plat */}
       <td>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-
-          {/* ANPR status badge */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            <span style={{
-              display: "inline-flex", alignItems: "center", gap: 4,
-              padding: "2px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600,
-              background: vehicle.anpr_verified ? "#dff0d8" : "#f5f5f5",
-              color:      vehicle.anpr_verified ? "#27ae60" : "#888",
+        {!showPlate ? (
+          <button type="button"
+            onClick={() => { setShowPlate(true); setNewPlate(""); setPlateErr(null); }}
+            disabled={busy || vehicle.is_parked}
+            title={vehicle.is_parked ? "Tidak bisa ubah plat saat parkir" : ""}
+            style={{
+              background: "transparent", border: "1px solid #aaa", color: "#555",
+              borderRadius: 3, padding: "3px 9px", fontSize: 11, cursor: "pointer",
+              opacity: vehicle.is_parked ? 0.5 : 1,
+              display: "flex", alignItems: "center", gap: 4,
             }}>
-              <i className={`fa ${vehicle.anpr_verified ? "fa-check-circle" : "fa-times-circle"}`}
-                style={{ fontSize: 11 }} />
-              {vehicle.anpr_verified ? "Terverifikasi" : "Belum Diverifikasi"}
-            </span>
-          </div>
-
-          {/* Notes input for verification */}
-          {!vehicle.anpr_verified && (
-            <input type="text" placeholder="Catatan (opsional)" value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              style={{ width: "100%", fontSize: 11, padding: "3px 7px",
-                border: "1px solid #ccc", borderRadius: 3, fontFamily: "'Roboto', sans-serif" }} />
-          )}
-
-          {/* ANPR action button */}
-          {!vehicle.anpr_verified ? (
-            <button type="button" onClick={handleVerify} disabled={busy}
+            <i className="fa fa-edit" style={{ fontSize: 10 }} />
+            Ubah Plat
+          </button>
+        ) : (
+        <>
+          <label style={{ fontSize: 11, color: "#e67e22", display: "flex", alignItems: "center", gap: 5 }}>
+            <input type="checkbox"
+              checked={forceTransfer}
+              onChange={(e) => setForceTransfer(e.target.checked)} />
+            Force (kendaraan sedang parkir)
+          </label>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+            <input type="text" placeholder="D 1234 AB" value={newPlate} maxLength={12} autoFocus
+              onChange={(e) => { setNewPlate(e.target.value.toUpperCase()); setPlateErr(null); }}
+              onKeyDown={(e) => e.key === "Escape" && setShowPlate(false)}
               style={{
-                background: "#337ab7", color: "#fff", border: "none", borderRadius: 3,
-                padding: "4px 10px", fontSize: 11, cursor: busy ? "not-allowed" : "pointer",
-                fontFamily: "'Roboto', sans-serif", opacity: busy ? 0.7 : 1,
+                fontSize: 12, padding: "3px 7px", borderRadius: 3,
+                border: `1px solid ${plateErr ? "#c0392b" : "#ccc"}`,
+                textTransform: "uppercase", letterSpacing: 1,
+              }} />
+            {plateErr && <div style={{ fontSize: 10.5, color: "#c0392b" }}>{plateErr}</div>}
+            <input type="text" placeholder="Alasan (opsional)" value={plateReason}
+              onChange={(e) => setPlateReason(e.target.value)}
+              style={{ fontSize: 11, padding: "3px 7px", borderRadius: 3, border: "1px solid #ccc" }} />
+            <div style={{ display: "flex", gap: 5 }}>
+              <button type="button" onClick={handleChangePlate} disabled={busy || !newPlate}
+                style={{
+                  background: "#e67e22", color: "#fff", border: "none",
+                  borderRadius: 3, padding: "3px 9px", fontSize: 11, cursor: "pointer",
+                  opacity: !newPlate ? 0.5 : 1,
+                }}>
+                Simpan
+              </button>
+              <button type="button"
+                onClick={() => { setShowPlate(false); setNewPlate(""); setPlateErr(null); }}
+                style={{
+                  background: "transparent", border: "1px solid #ccc", color: "#777",
+                  borderRadius: 3, padding: "3px 9px", fontSize: 11, cursor: "pointer",
+                }}>
+                Batal
+              </button>
+            </div>
+          </div>
+        </>
+        )}
+
+        {/* Transfer kepemilikan */}
+        <div style={{ borderTop: "1px solid #f0f0f0", paddingTop: 6, marginTop: 6 }}>
+          {!showTransfer ? (
+            <button type="button"
+              onClick={() => { setShowTransfer(true); setNewNim(""); setNewOwner(""); }}
+              disabled={busy || vehicle.is_parked}
+              style={{
+                background: "transparent", border: "1px solid #aaa", color: "#555",
+                borderRadius: 3, padding: "3px 9px", fontSize: 11, cursor: "pointer",
+                opacity: vehicle.is_parked ? 0.5 : 1,
                 display: "flex", alignItems: "center", gap: 4,
               }}>
-              <i className="fa fa-check" style={{ fontSize: 10 }} />
-              {busy ? "Memproses..." : "Verifikasi ANPR"}
+              <i className="fa fa-exchange" style={{ fontSize: 10 }} />
+              Transfer
             </button>
           ) : (
-            <button type="button" onClick={handleUnverify} disabled={busy}
-              style={{
-                background: "#fff", color: "#c0392b", border: "1px solid #c0392b",
-                borderRadius: 3, padding: "4px 10px", fontSize: 11,
-                cursor: busy ? "not-allowed" : "pointer",
-                fontFamily: "'Roboto', sans-serif", opacity: busy ? 0.7 : 1,
-                display: "flex", alignItems: "center", gap: 4,
-              }}>
-              <i className="fa fa-times" style={{ fontSize: 10 }} />
-              Cabut Verifikasi
-            </button>
-          )}
-
-          {/* ── Plate change section ── */}
-          <div style={{ borderTop: "1px solid #f0f0f0", paddingTop: 6, marginTop: 2 }}>
-            {!showPlate ? (
-              <button type="button" onClick={() => { setShowPlate(true); setNewPlate(""); setPlateErr(null); }}
-                disabled={busy || vehicle.is_parked}
-                title={vehicle.is_parked ? "Tidak bisa ubah plat saat kendaraan sedang parkir" : ""}
-                style={{
-                  background: "transparent", border: "1px solid #aaa", color: "#555",
-                  borderRadius: 3, padding: "3px 9px", fontSize: 11, cursor: "pointer",
-                  fontFamily: "'Roboto', sans-serif", opacity: vehicle.is_parked ? 0.5 : 1,
-                  display: "flex", alignItems: "center", gap: 4,
-                }}>
-                <i className="fa fa-edit" style={{ fontSize: 10 }} />
-                Ubah Plat Nomor
-              </button>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                <div style={{ fontSize: 10.5, color: "#c0392b", fontWeight: 600 }}>
-                  ⚠ Mengubah plat akan mereset verifikasi ANPR
-                </div>
-                <input type="text" placeholder="Plat baru: D 1234 AB"
-                  value={newPlate} maxLength={12}
-                  onChange={(e) => { setNewPlate(e.target.value.toUpperCase()); setPlateErr(null); }}
-                  onKeyDown={(e) => e.key === "Escape" && setShowPlate(false)}
-                  style={{
-                    fontSize: 12, padding: "3px 7px", border: `1px solid ${plateErr ? "#c0392b" : "#ccc"}`,
-                    borderRadius: 3, fontFamily: "'Roboto', sans-serif",
-                    textTransform: "uppercase", letterSpacing: 1,
-                  }} autoFocus />
-                {plateErr && (
-                  <div style={{ fontSize: 10.5, color: "#c0392b" }}>{plateErr}</div>
-                )}
-                <input type="text" placeholder="Alasan perubahan (opsional)"
-                  value={plateReason}
-                  onChange={(e) => setPlateReason(e.target.value)}
-                  style={{
-                    fontSize: 11, padding: "3px 7px", border: "1px solid #ccc",
-                    borderRadius: 3, fontFamily: "'Roboto', sans-serif",
-                  }} />
-                <div style={{ display: "flex", gap: 5 }}>
-                  <button type="button" onClick={handleChangePlate} disabled={busy || !newPlate}
-                    style={{
-                      background: "#e67e22", color: "#fff", border: "none", borderRadius: 3,
-                      padding: "3px 9px", fontSize: 11, cursor: "pointer",
-                      fontFamily: "'Roboto', sans-serif", opacity: !newPlate ? 0.5 : 1,
-                    }}>
-                    Simpan Plat
-                  </button>
-                  <button type="button" onClick={() => { setShowPlate(false); setNewPlate(""); setPlateErr(null); }}
-                    style={{
-                      background: "transparent", border: "1px solid #ccc", color: "#777",
-                      borderRadius: 3, padding: "3px 9px", fontSize: 11, cursor: "pointer",
-                      fontFamily: "'Roboto', sans-serif",
-                    }}>
-                    Batal
-                  </button>
-                </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              <div style={{ fontSize: 10.5, color: "#337ab7", fontWeight: 600 }}>
+                Transfer Kepemilikan
               </div>
-            )}
-          </div>
-
-          {/* Inline feedback */}
-          {msg && (
-            <div style={{
-              fontSize: 11, padding: "3px 8px", borderRadius: 3,
-              background: msg.ok ? "#dff0d8" : "#f2dede",
-              color:      msg.ok ? "#27ae60"  : "#c0392b",
-            }}>
-              {msg.text}
+              <input type="text" placeholder="NIM baru" value={newNim}
+                onChange={(e) => setNewNim(e.target.value)}
+                style={{ fontSize: 11, padding: "3px 7px", borderRadius: 3, border: "1px solid #ccc" }}
+                autoFocus />
+              <input type="text" placeholder="Nama pemilik baru" value={newOwner}
+                onChange={(e) => setNewOwner(e.target.value)}
+                style={{ fontSize: 11, padding: "3px 7px", borderRadius: 3, border: "1px solid #ccc" }} />
+              <input type="text" placeholder="Alasan (opsional)" value={transferReason}
+                onChange={(e) => setTransferReason(e.target.value)}
+                style={{ fontSize: 11, padding: "3px 7px", borderRadius: 3, border: "1px solid #ccc" }} />
+              <div style={{ display: "flex", gap: 5 }}>
+                <button type="button" onClick={handleTransfer}
+                  disabled={busy || !newNim || !newOwner}
+                  style={{
+                    background: "#337ab7", color: "#fff", border: "none",
+                    borderRadius: 3, padding: "3px 9px", fontSize: 11, cursor: "pointer",
+                    opacity: (!newNim || !newOwner) ? 0.5 : 1,
+                  }}>
+                  Transfer
+                </button>
+                <button type="button"
+                  onClick={() => { setShowTransfer(false); setNewNim(""); setNewOwner(""); }}
+                  style={{
+                    background: "transparent", border: "1px solid #ccc", color: "#777",
+                    borderRadius: 3, padding: "3px 9px", fontSize: 11, cursor: "pointer",
+                  }}>
+                  Batal
+                </button>
+              </div>
             </div>
           )}
         </div>
+
+        {msg && (
+          <div style={{
+            fontSize: 11, padding: "3px 8px", borderRadius: 3, marginTop: 4,
+            background: msg.ok ? "#dff0d8" : "#f2dede",
+            color:      msg.ok ? "#27ae60"  : "#c0392b",
+          }}>
+            {msg.text}
+          </div>
+        )}
       </td>
     </tr>
   );
@@ -404,7 +414,13 @@ function AdminDashboard({
   const [loading,      setLoading]      = useState(true);
   const [error,        setError]        = useState<string | null>(null);
   const [search,       setSearch]       = useState("");
-  const [filterAnpr,   setFilterAnpr]   = useState<"all" | "verified" | "unverified">("all");
+  const [sessions,     setSessions]     = useState<ActiveSession[]>([]);
+  const [sessLoading,  setSessLoading]  = useState(false);
+  const [approving,    setApproving]    = useState<string | null>(null);
+  const [paymentPlate,  setPaymentPlate]  = useState<string | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<string | null>(null);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -418,26 +434,50 @@ function AdminDashboard({
     }
   }, [token]);
 
-  useEffect(() => { load(); }, [load]);
+  const loadSessions = useCallback(async () => {
+    setSessLoading(true);
+    console.log("loadSessions called");
+    try {
+      const data = await apiFetch("/api/v1/admin/sessions", token);
+      setSessions(data);
+      console.log("sessions loaded:", data);
+    } catch (e){ 
+      console.error("sessions error:", e);
+    }
+    finally { setSessLoading(false); }
+  }, [token]);
+
+  const handleApproveExit = async (plate: string, method: string) => {
+    setPaymentLoading(true);
+    setPaymentMethod(method);
+    // Simulasi proses pembayaran 5 detik
+    await new Promise((res) => setTimeout(res, 5000));
+    try {
+      await apiFetch(`/api/v1/admin/sessions/${plate}/approve-exit`, token, "POST");
+      await loadSessions();
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : "Gagal.");
+    } finally {
+      setPaymentLoading(false);
+      setPaymentPlate(null);
+      setPaymentMethod(null);
+    }
+  };  
+
+  useEffect(() => { load(); loadSessions(); }, [load, loadSessions]);
 
   const filtered = vehicles.filter((v) => {
     const q = search.toLowerCase();
-    const matchSearch = !q ||
+    return !q ||
       v.plate_raw.toLowerCase().includes(q) ||
       v.owner.toLowerCase().includes(q) ||
       v.nim.includes(q) ||
       v.model.toLowerCase().includes(q);
-    const matchAnpr =
-      filterAnpr === "all" ||
-      (filterAnpr === "verified"   && v.anpr_verified) ||
-      (filterAnpr === "unverified" && !v.anpr_verified);
-    return matchSearch && matchAnpr;
   });
 
-  const totalVerified   = vehicles.filter((v) => v.anpr_verified).length;
-  const totalUnverified = vehicles.filter((v) => !v.anpr_verified).length;
-  const totalParked     = vehicles.filter((v) => v.is_parked).length;
-
+  const totalParked  = vehicles.filter((v) => v.is_parked).length;
+  const totalGuest   = sessions.filter((s) => s.is_guest).length;
+  const totalSession = sessions.length;
   return (
     <div style={{ minHeight: "100vh", background: "#f5f5f5", fontFamily: "'Roboto', sans-serif" }}>
 
@@ -489,10 +529,10 @@ function AdminDashboard({
         {/* Stat cards */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
           {[
-            { label: "Total Kendaraan",     value: vehicles.length,  color: "#31708f", bg: "#d9edf7" },
-            { label: "Terverifikasi ANPR",  value: totalVerified,    color: "#27ae60", bg: "#dff0d8" },
-            { label: "Belum Diverifikasi",  value: totalUnverified,  color: "#e67e22", bg: "#fcf8e3" },
-            { label: "Sedang Parkir",       value: totalParked,      color: "#337ab7", bg: "#d9edf7" },
+            { label: "Total Kendaraan",  value: vehicles.length, color: "#31708f", bg: "#d9edf7" },
+            { label: "Sedang Parkir",    value: totalSession,    color: "#337ab7", bg: "#d9edf7" },
+            { label: "Kendaraan Tamu",   value: totalGuest,      color: "#e67e22", bg: "#fcf8e3" },
+            { label: "Terdaftar Parkir", value: totalParked,     color: "#27ae60", bg: "#dff0d8" },
           ].map((s) => (
             <div key={s.label} style={{
               background: "#fff", border: `1px solid ${s.bg}`,
@@ -519,25 +559,12 @@ function AdminDashboard({
                 fontFamily: "'Roboto', sans-serif", color: "#333",
               }} />
           </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {(["all", "unverified", "verified"] as const).map((f) => (
-              <button key={f} type="button" onClick={() => setFilterAnpr(f)}
-                style={{
-                  padding: "4px 12px", borderRadius: 3, fontSize: 12, cursor: "pointer",
-                  fontFamily: "'Roboto', sans-serif", border: "1px solid",
-                  borderColor: filterAnpr === f ? "#337ab7" : "#ddd",
-                  background:  filterAnpr === f ? "#337ab7" : "#fff",
-                  color:       filterAnpr === f ? "#fff"    : "#555",
-                  fontWeight:  filterAnpr === f ? 600       : 400,
-                }}>
-                {f === "all" ? "Semua" : f === "verified" ? "✓ Terverifikasi" : "✗ Belum Diverifikasi"}
-              </button>
-            ))}
-          </div>
           <button type="button" onClick={load} disabled={loading}
             style={{
               background: "#fff", border: "1px solid #ddd", borderRadius: 3,
-              padding: "4px 12px", fontSize: 12, cursor: "pointer",
+              padding: "4px 12px", fontSize: 12, 
+              cursor: loading ? "not-allowed" : "pointer",
+              opacity: loading ? 0.6 : 1,
               fontFamily: "'Roboto', sans-serif", color: "#555",
               display: "flex", alignItems: "center", gap: 5,
             }}>
@@ -573,9 +600,9 @@ function AdminDashboard({
                     <th style={{ width: 120 }}>Plat Nomor</th>
                     <th style={{ width: 160 }}>Pemilik / NIM</th>
                     <th style={{ width: 150 }}>Kendaraan</th>
-                    <th style={{ width: 110 }}>Status</th>
+                    <th style={{ width: 130 }}>Status & Verifikasi</th>
                     <th style={{ width: 160 }}>E-Wallet</th>
-                    <th>ANPR &amp; Plat</th>
+                    <th style={{ width: 160 }}>Ubah Plat</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -588,18 +615,106 @@ function AdminDashboard({
           </div>
         </div>
 
-        {/* Info */}
-        <div className="alert alert-info" style={{ marginTop: 16 }}>
-          <strong>Panduan:</strong>{" "}
-          <strong>Verifikasi ANPR</strong> — petugas mencocokkan STNK fisik dengan plat di sistem. Setelah diverifikasi, gerbang terbuka otomatis saat kamera mendeteksi plat tersebut.{" "}
-          <strong>Ubah Plat Nomor</strong> — khusus admin, akan mereset verifikasi ANPR sehingga perlu diverifikasi ulang dengan STNK baru.
-        </div>
+        {/* Session Aktif */}
+        {sessions.map((s) => {
+          const entryTime = new Date(s.entry_time).toLocaleTimeString("id-ID", {
+            hour: "2-digit", minute: "2-digit",
+          });
+          const isApproving = approving === s.plate;
+          const isGuest = s.is_guest || s.owner === "Tamu";
 
+          return (
+            <div key={s.plate} style={{
+              background: "#fff",
+              border: `1px solid ${isGuest ? "#f0ad4e" : "#dde"}`,
+              borderRadius: 4, padding: "12px 16px",
+              display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap",
+            }}>
+              <span className="plate" style={{ fontSize: 10, padding: "2px 8px", letterSpacing: "1.5px" }}>
+                {s.plate}
+              </span>
+              <div style={{ flex: 1, minWidth: 160 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#333" }}>
+                  {s.owner}{s.model !== "–" && ` — ${s.model}`}
+                </div>
+                <div style={{ fontSize: 11, color: "#888" }}>
+                  Masuk {entryTime} · {s.gate_location}
+                </div>
+              </div>
+
+              <span className={`badge ${isGuest ? "badge-orange" : "badge-green"}`}>
+                {isGuest ? "Tamu" : "Terdaftar"}
+              </span>
+
+              {s.needs_manual_payment && !s.exit_approved && (
+                <span className="badge" style={{ background: "#c0392b", color: "#fff" }}>
+                  ⚠ Perlu Bayar Manual
+                </span>
+              )}
+
+              {(isGuest || s.needs_manual_payment) && !s.exit_approved && (
+                <>
+                  {paymentPlate === s.plate ? (
+                    paymentLoading ? (
+                      <div style={{
+                        display: "flex", alignItems: "center", gap: 10,
+                        background: "#f8f9fa", border: "1px solid #dde",
+                        borderRadius: 4, padding: "8px 14px", fontSize: 13,
+                      }}>
+                        <i className="fa fa-spinner fa-spin" style={{ color: "#337ab7" }} />
+                        <span>Memproses <strong>{paymentMethod}</strong>...</span>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                        <div style={{ fontSize: 12, color: "#555", fontWeight: 600 }}>Pilih metode pembayaran:</div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {["Cash", "QRIS", "Tap e-Money"].map((method) => (
+                            <button key={method} type="button"
+                              onClick={() => handleApproveExit(s.plate, method)}
+                              style={{
+                                background: "#fff", border: "1px solid #337ab7", color: "#337ab7",
+                                borderRadius: 3, padding: "5px 12px", fontSize: 12, cursor: "pointer", fontWeight: 500,
+                              }}>
+                              {method === "Cash" ? "💵 Cash" : method === "QRIS" ? "📱 QRIS" : "💳 Tap e-Money"}
+                            </button>
+                          ))}
+                          <button type="button" onClick={() => setPaymentPlate(null)}
+                            style={{
+                              background: "transparent", border: "1px solid #ccc", color: "#888",
+                              borderRadius: 3, padding: "5px 10px", fontSize: 12, cursor: "pointer",
+                            }}>
+                            Batal
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  ) : (
+                    <button type="button" onClick={() => setPaymentPlate(s.plate)}
+                      style={{
+                        background: "#27ae60", color: "#fff", border: "none",
+                        borderRadius: 3, padding: "5px 12px", fontSize: 12, cursor: "pointer",
+                      }}>
+                      ✓ Izinkan Keluar
+                    </button>
+                  )}
+                </>
+              )}
+
+              {(isGuest || s.needs_manual_payment) && !s.exit_approved && (
+                <span className="badge badge-green">✓ Keluar Diizinkan</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+        <div className="alert alert-info" style={{ marginTop: 16 }}>
+          <strong>Panduan:</strong> Kendaraan <strong>Tamu</strong> masuk tanpa registrasi — admin perlu klik <strong>Izinkan Keluar</strong> sebelum kamera exit bisa membuka gate. Kendaraan <strong>Terdaftar</strong> keluar otomatis via ANPR.
+        </div>
         <p style={{ fontSize: 11, color: "#bbb", textAlign: "center", marginTop: 12 }}>
           Panel Admin — ITB Jatinangor Parking System &bull; Login sebagai: {adminId}
         </p>
-      </div>
-    </div>
+        </div>
   );
 }
 

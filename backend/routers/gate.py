@@ -15,7 +15,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect, status
 
 from core.config import get_settings, Settings
-from core.security import require_anpr_token, require_dashboard_token, verify_esp32_token
+from core.security import require_anpr_key, require_dashboard_token, verify_esp32_device_key
 from models.gate import GateTriggerRequest, GateTriggerResponse
 from services.gate_service import process_gate_trigger, get_history
 from services.ws_manager import ws_manager
@@ -38,7 +38,7 @@ router = APIRouter()
 )
 async def gate_trigger(
     request: GateTriggerRequest,
-    _token_payload: Annotated[dict, Depends(require_anpr_token)],
+    _: Annotated[None, Depends(require_anpr_key)],
 ) -> GateTriggerResponse:
     return await process_gate_trigger(request)
 
@@ -78,12 +78,11 @@ async def dashboard_ws(
     Note: For Next.js, use the custom hook `useGateEvents` which handles
     reconnection and token injection automatically.
     """
-    from core.security import verify_esp32_token  # noqa — reuse JWT decode
     from jose import jwt, JWTError
 
     try:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
-        if payload.get("sub") not in ("dashboard_user", "anpr_service"):
+        if payload.get("sub") not in ("dashboard_user", "parking_admin"):
             raise JWTError("bad sub")
     except JWTError:
         await websocket.close(code=4001, reason="Unauthorized")
@@ -103,14 +102,16 @@ async def dashboard_ws(
 async def esp32_ws(
     websocket: WebSocket,
     gate_id: str,
-    token: str = Query(..., description="ESP32 gate JWT token"),
+    device_key: str = Query(..., description="ESP32 device key"),
     settings: Settings = Depends(get_settings),
 ):
+    
     """
     Each ESP32 gate unit connects here on boot and holds the connection open.
     The backend pushes {"action":"open_gate","duration_ms":1000} on plate match.
     """
-    if not verify_esp32_token(token, settings):
+    print(f"[DEBUG] ESP32 WS hit — gate_id={repr(gate_id)} device_key={repr(device_key)}")
+    if not verify_esp32_device_key(device_key, settings):
         await websocket.close(code=4001, reason="Unauthorized")
         logger.warning("ESP32 gate '%s' rejected — bad token.", gate_id)
         return
@@ -121,6 +122,53 @@ async def esp32_ws(
     try:
         while True:
             # ESP32 sends heartbeat pings ("ping"); backend ignores content
+            msg = await websocket.receive_text()
+            if msg == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        logger.warning("Gate '%s' disconnected.", gate_id)
+        await ws_manager.disconnect_gate(gate_id)
+
+ws_router = APIRouter()
+
+@ws_router.websocket("/gate-events")
+async def dashboard_ws_2(
+    websocket: WebSocket,
+    token: str = Query(...),
+    settings: Settings = Depends(get_settings),
+):
+    from jose import jwt, JWTError
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+        if payload.get("sub") not in ("dashboard_user", "parking_admin"):
+            raise JWTError("bad sub")
+    except JWTError:
+        await websocket.close(code=4001, reason="Unauthorized")
+        return
+    await ws_manager.connect_dashboard(websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        await ws_manager.disconnect_dashboard(websocket)
+
+
+@ws_router.websocket("/esp32/{gate_id}")
+async def esp32_ws_2(
+    websocket: WebSocket,
+    gate_id: str,
+    device_key: str = Query(...),
+    settings: Settings = Depends(get_settings),
+):
+    print(f"[DEBUG] ESP32 WS hit — gate_id={repr(gate_id)} device_key={repr(device_key)}")
+    if not verify_esp32_device_key(device_key, settings):
+        await websocket.close(code=4001, reason="Unauthorized")
+        logger.warning("ESP32 gate '%s' rejected — bad device_key.", gate_id)
+        return
+    await ws_manager.connect_gate(gate_id, websocket)
+    logger.info("Gate '%s' online.", gate_id)
+    try:
+        while True:
             msg = await websocket.receive_text()
             if msg == "ping":
                 await websocket.send_text("pong")
