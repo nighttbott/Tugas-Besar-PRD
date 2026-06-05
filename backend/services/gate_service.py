@@ -17,35 +17,37 @@ Decision tree for exit:
 """
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 import time
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, desc
+from sqlalchemy.orm import selectinload
 
 from core.database import (
     check_cooldown,
     set_cooldown,
-    lookup_vehicle,
     get_active_session,
     create_session,
-    close_session,
-    HISTORY_DB,
-    save_vehicle_db,
+    delete_active_session,
     flag_manual_payment,
+    gate_location,
+    _normalize,
 )
 from models.gate import GateTriggerRequest, GateTriggerResponse
+from models.domain import Vehicle, History, EWallet
 from services.ws_manager import ws_manager
+
+from core.mqtt_manager import mqtt_manager
 
 logger = logging.getLogger("gate_service")
 
 CONFIDENCE_THRESHOLD = 0.75
 
-
-
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-
-async def process_gate_trigger(req: GateTriggerRequest) -> GateTriggerResponse:
-    plate = req.plate_number
+async def process_gate_trigger(req: GateTriggerRequest, db: AsyncSession) -> GateTriggerResponse:
+    plate = _normalize(req.plate_number)
     ts = _now_iso()
 
     # ── 1. Confidence gate ────────────────────────────────────────────────────
@@ -71,10 +73,12 @@ async def process_gate_trigger(req: GateTriggerRequest) -> GateTriggerResponse:
         )
 
     # ── 3. Database lookup ────────────────────────────────────────────────────
-    vehicle: Optional[dict] = await lookup_vehicle(plate)
+    query = select(Vehicle).where(Vehicle.plate_normalized == plate).options(selectinload(Vehicle.ewallets))
+    result = await db.execute(query)
+    vehicle = result.scalar_one_or_none()
 
     # ── 4. Blocked check (hanya untuk kendaraan terdaftar) ───────────────────
-    if vehicle and vehicle.get("status") == "blocked":
+    if vehicle and vehicle.status == "blocked":
         logger.warning("[%s] Vehicle is blocked.", plate)
         await set_cooldown(plate)
         return GateTriggerResponse(
@@ -104,13 +108,13 @@ async def process_gate_trigger(req: GateTriggerRequest) -> GateTriggerResponse:
         await set_cooldown(plate)
 
         # Auto-verify saat entry pertama
-        if vehicle and not vehicle.get("verified_at"):
-            vehicle["verification_status"]      = "verified"
-            vehicle["verified_at"]              = ts
-            vehicle["verified_gate"]            = req.gate_id
-            vehicle["verification_confidence"]  = req.confidence
-            vehicle["status"]                   = "active"
-            save_vehicle_db()
+        if vehicle and not vehicle.verified_at:
+            vehicle.verification_status      = "verified"
+            vehicle.verified_at              = datetime.now(timezone.utc)
+            vehicle.verified_gate            = req.gate_id
+            # verification_confidence removed from db model, we can skip it
+            vehicle.status                   = "active"
+            await db.commit()
             logger.info("[%s] Auto-verified on first physical entry via gate %s.", plate, req.gate_id)
 
         # Broadcast ke dashboard hanya kalau terdaftar
@@ -118,23 +122,22 @@ async def process_gate_trigger(req: GateTriggerRequest) -> GateTriggerResponse:
             event = {
                 "type":          "gate_entry",
                 "plate":         plate,
-                "plate_raw":     vehicle["plate_raw"],
+                "plate_raw":     vehicle.plate_raw,
                 "gate_id":       req.gate_id,
-                "owner":         vehicle["owner"],
-                "vehicle_model": vehicle["model"],
+                "owner":         vehicle.owner,
+                "vehicle_model": vehicle.model,
                 "confidence":    req.confidence,
                 "timestamp":     ts,
             }
             await ws_manager.broadcast_gate_event(event)
 
-        delivered = await ws_manager.send_gate_command(req.gate_id, {
+        delivered = await mqtt_manager.publish_command(req.gate_id, {
             "action":      "open_gate",
-            "gate_id":     req.gate_id,
             "duration_ms": 5000,
             "plate":       plate,
         })
         if not delivered:
-            logger.error("[%s] Gate '%s' offline — command not delivered!", plate, req.gate_id)
+            logger.error("[%s] Gate '%s' offline or MQTT error — command not delivered!", plate, req.gate_id)
 
         logger.info("[%s] Entry approved → gate %s opened. Registered=%s",
                     plate, req.gate_id, vehicle is not None)
@@ -144,8 +147,8 @@ async def process_gate_trigger(req: GateTriggerRequest) -> GateTriggerResponse:
             gate_id=req.gate_id,
             reason="Akses masuk diberikan.",
             session_id=session["entry_time"],
-            owner=vehicle["owner"] if vehicle else None,
-            vehicle_model=vehicle["model"] if vehicle else None,
+            owner=vehicle.owner if vehicle else None,
+            vehicle_model=vehicle.model if vehicle else None,
             timestamp=ts,
         )
 
@@ -175,18 +178,24 @@ async def process_gate_trigger(req: GateTriggerRequest) -> GateTriggerResponse:
                 timestamp=ts,
             )
 
+        # Hitung fee
+        duration_secs = time.time() - existing.get("entry_ts", time.time())
+        duration_hours = max(1, int(duration_secs / 3600) + (1 if duration_secs % 3600 > 0 else 0))
+        
+        vtype = vehicle.vehicle_type if vehicle else "motor"
+        est_fee = (
+            min(1000 + (duration_hours - 1) * 1000, 2000)
+            if vtype == "motor"
+            else min(2000 + (duration_hours - 1) * 1000, 10000)
+        )
+
+        payment_method = "manual"
+        paid_provider = None
+
         # Cek saldo e-wallet kalau kendaraan terdaftar
         if vehicle and not existing.get("exit_approved"):
-            ewallets = vehicle.get("ewallets", [])
-            duration_secs = time.time() - existing.get("entry_ts", time.time())
-            duration_hours = max(1, int(duration_secs / 3600) + (1 if duration_secs % 3600 > 0 else 0))
-            vtype = vehicle.get("vehicle_type", "motor")
-            est_fee = (
-                min(1000 + (duration_hours - 1) * 1000, 2000)
-                if vtype == "motor"
-                else min(2000 + (duration_hours - 1) * 1000, 10000)
-            )
-            total_saldo = sum(e["balance"] for e in ewallets)
+            ewallets = sorted(vehicle.ewallets, key=lambda x: not x.is_primary)
+            total_saldo = sum(e.balance for e in ewallets)
 
             if total_saldo < est_fee:
                 logger.warning("[%s] Insufficient balance (Rp%d < Rp%d) — manual payment required.",
@@ -201,56 +210,87 @@ async def process_gate_trigger(req: GateTriggerRequest) -> GateTriggerResponse:
                     reason=f"Saldo e-wallet tidak cukup (Rp{total_saldo:,} < Rp{est_fee:,}). Hubungi admin untuk pembayaran manual.",
                     timestamp=ts,
                 )
+            
+            # Autodebit from the first ewallet with sufficient balance
+            for ew in ewallets:
+                if ew.balance >= est_fee:
+                    ew.balance -= est_fee
+                    payment_method = "autodebit"
+                    paid_provider = ew.provider
+                    break
+            
+            if payment_method == "autodebit":
+                await db.commit()
 
-        session = await close_session(plate)
-        if not session:
-            await set_cooldown(plate)
-            return GateTriggerResponse(
-                action="deny_access",
-                plate_number=plate,
-                gate_id=req.gate_id,
-                reason="Tidak ada sesi aktif.",
-                timestamp=ts,
-            )
-
+        # Build History payload
+        history_record = History(
+            plate_normalized=plate,
+            gate_id=existing.get("gate_id", req.gate_id),
+            entry_time=datetime.fromisoformat(existing.get("entry_time")),
+            exit_time=datetime.now(timezone.utc),
+            duration_secs=int(duration_secs),
+            fee=est_fee,
+            status="completed",
+        )
+        
+        # Only attach to vehicle if it exists in DB
+        if vehicle:
+            db.add(history_record)
+            await db.commit()
+            
+        await delete_active_session(plate)
         await set_cooldown(plate)
 
         if vehicle:
             event = {
                 "type":          "gate_exit",
                 "plate":         plate,
-                "plate_raw":     vehicle["plate_raw"],
+                "plate_raw":     vehicle.plate_raw,
                 "gate_id":       req.gate_id,
-                "owner":         vehicle["owner"],
-                "vehicle_model": vehicle["model"],
-                "duration_secs": session["duration_secs"],
-                "fee":           session["fee"],
+                "owner":         vehicle.owner,
+                "vehicle_model": vehicle.model,
+                "duration_secs": history_record.duration_secs,
+                "fee":           est_fee,
                 "confidence":    req.confidence,
                 "timestamp":     ts,
             }
             await ws_manager.broadcast_gate_event(event)
 
-        await ws_manager.send_gate_command(req.gate_id, {
+        await mqtt_manager.publish_command(req.gate_id, {
             "action":      "open_gate",
-            "gate_id":     req.gate_id,
             "duration_ms": 5000,
             "plate":       plate,
         })
 
-        logger.info("[%s] Exit approved → fee Rp%d → gate %s opened.",
-                    plate, session.get("fee", 0), req.gate_id)
+        logger.info("[%s] Exit approved → fee Rp%d → gate %s opened.", plate, est_fee, req.gate_id)
         return GateTriggerResponse(
             action="open_gate",
             plate_number=plate,
             gate_id=req.gate_id,
             reason="Keluar diproses. Billing selesai.",
-            fee=session.get("fee"),
-            owner=vehicle["owner"] if vehicle else None,
-            vehicle_model=vehicle["model"] if vehicle else None,
+            fee=est_fee,
+            owner=vehicle.owner if vehicle else None,
+            vehicle_model=vehicle.model if vehicle else None,
             timestamp=ts,
         )    
 
-
-async def get_history(limit: int = 50) -> list[dict]:
+async def get_history(db: AsyncSession, limit: int = 50) -> list[dict]:
     """Return the last N parking sessions (newest first)."""
-    return list(reversed(HISTORY_DB[-limit:]))
+    query = select(History).order_by(desc(History.entry_time)).limit(limit)
+    result = await db.execute(query)
+    records = result.scalars().all()
+    
+    return [
+        {
+            "id": r.id,
+            "plate": r.plate_normalized,
+            "gate_id": r.gate_id,
+            "entry_time": r.entry_time.isoformat() if r.entry_time else None,
+            "exit_time": r.exit_time.isoformat() if r.exit_time else None,
+            "duration_secs": r.duration_secs,
+            "fee": r.fee,
+            "status": r.status,
+            "gate_location": gate_location(r.gate_id)
+        }
+        for r in records
+    ]

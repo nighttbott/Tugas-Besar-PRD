@@ -20,9 +20,10 @@ import { VehicleCard } from "@/components/parking/VehicleCard";
 import { ParkingStatus } from "@/components/parking/ParkingStatus";
 import { HistoryTable }  from "@/components/parking/HistoryTable";
 import { TarifInfo }     from "@/components/parking/TarifInfo";
-import { vehicleApi, validatePlate, type VehicleType, type Vehicle } from "@/lib/api";
+import { validatePlate, type VehicleType, type Vehicle } from "@/lib/api";
 import { getStoredUser, loginUser, clearToken } from "@/lib/api";
-
+import { useVehicles } from "@/hooks/useVehicles";
+import { useAddVehicle } from "@/hooks/useAddVehicle";
 
 // Generate with: python -c "from core.security import create_dashboard_token; ..."
 
@@ -47,16 +48,16 @@ export default function ParkirPage() {
 
   // Vehicle
   const [activeTab,    setActiveTab]    = useState<TabId>("kendaraan");
-  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [vehiclesLoad, setVehiclesLoad] = useState(true);
-  const [vehiclesErr,  setVehiclesErr]  = useState<string | null>(null);
+  
+  const { data: vehicles = [], isLoading: vehiclesLoad, error: vehiclesErrObj, refetch: refetchVehicles } = useVehicles(user?.nim);
+  const vehiclesErr = vehiclesErrObj instanceof Error ? vehiclesErrObj.message : null;
+  const { mutateAsync: addVehicleMutate, isPending: addLoading } = useAddVehicle();
 
   // Add vehicle form state
   const [newPlat,     setNewPlat]     = useState("");
   const [newPlatErr,  setNewPlatErr]  = useState<string | null>(null);
   const [newModel,    setNewModel]    = useState("");
   const [newJenis,    setNewJenis]    = useState<VehicleType>("motor");
-  const [addLoading,  setAddLoading]  = useState(false);
   const [addMsg,      setAddMsg]      = useState<{ type: "success" | "error"; text: string } | null>(null);
 
   // ── Load user information from backend ────────────────────────────────────────────
@@ -78,27 +79,7 @@ export default function ParkirPage() {
   const handleLogout = () => {
     clearToken();
     setUser(null);
-    setVehicles([]);
   };
-
-  // ── Load vehicles from backend ────────────────────────────────────────────
-  const loadVehicles = useCallback(async () => {
-    setVehiclesLoad(true); 
-    setVehiclesErr(null);
-    try {
-      const data = await vehicleApi.list();
-      setVehicles(data);
-    } catch (e: unknown) {
-      setVehiclesErr(e instanceof Error ? e.message : "Gagal memuat data kendaraan.");
-    } finally {
-      setVehiclesLoad(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    const id = setInterval(loadVehicles, 20_000); // refresh tiap 5 detik
-    return () => clearInterval(id);
-  }, [loadVehicles]);
 
   // ── Plate input handler with auto-format ──────────────────────────────────
   const handlePlatChange = (raw: string) => {
@@ -122,32 +103,23 @@ export default function ParkirPage() {
       return;
     }
 
-    setAddLoading(true);
     try {
-      const result = await vehicleApi.add({
+      const result = await addVehicleMutate({
         plate_number: validation.normalized!,
         vehicle_type: newJenis,
         model:        newModel.trim(),
       }) as { message: string; plate_raw: string };
+      
       setAddMsg({ type: "success", text: result.message });
       setNewPlat("");
       setNewModel("");
       setNewPlatErr(null);
-      // Reload vehicle list from backend
-      await loadVehicles();
     } catch (e: unknown) {
       setAddMsg({
         type:  "error",
         text:   e instanceof Error ? e.message : "Gagal mendaftarkan kendaraan.",
       });
-    } finally {
-      setAddLoading(false);
     }
-  };
-
-  // ── Delete vehicle callback ────────────────────────────────────────────────
-  const handleDeleted = (plate: string) => {
-    setVehicles((v) => v.filter((x) => x.plate_normalized !== plate));
   };
 
   if (!user) {
@@ -302,7 +274,6 @@ export default function ParkirPage() {
                 <VehicleCard
                   key={v.plate_normalized}
                   vehicle={v}
-                  onUpdated={loadVehicles}
                 />
               ))}
             </div>
@@ -407,7 +378,7 @@ export default function ParkirPage() {
             TAB 2 — Status Parkir
         ══════════════════════════════════════════════════════════════════ */}
         <div className={`tab-content${activeTab === "status" ? " active" : ""}`}>
-          <ParkingStatus totalVehicles={vehicles.length} onGateEvent={loadVehicles} />
+          <ParkingStatus totalVehicles={vehicles.length} onGateEvent={() => refetchVehicles()} />
         </div>
 
         {/* ══════════════════════════════════════════════════════════════════

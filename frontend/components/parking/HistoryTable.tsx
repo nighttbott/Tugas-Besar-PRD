@@ -5,8 +5,9 @@
  */
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { Vehicle } from "@/lib/api";
+import { useParkingHistory } from "@/hooks/useParkingHistory";
 
 // Gate ID → readable location (mirrors backend GATE_LOCATIONS)
 const GATE_LABELS: Record<string, string> = {
@@ -59,29 +60,16 @@ function confColor(c: number) {
 }
 
 export function HistoryTable({ vehicles }: HistoryTableProps) {
-  const [records,  setRecords]  = useState<HistoryRecord[]>([]);
-  const [loading,  setLoading]  = useState(true);
-  const [error,    setError]    = useState<string | null>(null);
   const [filterPlat,  setFilterPlat]  = useState("all");
   const [filterBulan, setFilterBulan] = useState(NOW_MONTH);
 
-  useEffect(() => {
-    import("@/lib/api").then(({ gateApi }) =>
-      gateApi.getHistory(200)
-        .then((data) => {
-          const userPlates = new Set(vehicles.map((v) => v.plate_normalized));
-          const filtered = (data as HistoryRecord[]).filter((r) =>
-            userPlates.size === 0 || userPlates.has(r.plate)
-          );
-          setRecords(filtered);
-          setLoading(false);
-        })
-        .catch((e: unknown) => {
-          setError(e instanceof Error ? e.message : "Gagal memuat riwayat.");
-          setLoading(false);
-        })
-    );
-  }, [vehicles]);
+  const { data: recordsData = [], isLoading: loading, error: errorObj } = useParkingHistory(200);
+  const error = errorObj instanceof Error ? errorObj.message : null;
+  
+  const userPlates = new Set(vehicles.map((v) => v.plate_normalized));
+  const records = (recordsData as HistoryRecord[]).filter((r) =>
+    userPlates.size === 0 || userPlates.has(r.plate)
+  );
 
   const filtered = records.filter((r) => {
     const platMatch = filterPlat === "all" || r.plate === filterPlat;

@@ -11,6 +11,8 @@
 import Image from "next/image";
 import { useState, useMemo } from "react";
 import type { Vehicle } from "@/lib/api";
+import { useQueryClient } from "@tanstack/react-query";
+import { useUpdateVehicleModel } from "@/hooks/useUpdateVehicleModel";
 
 const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -69,11 +71,12 @@ interface Ewallet {
 
 interface VehicleCardProps {
   vehicle:    Vehicle;
-  onUpdated?: () => void | Promise<void>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-export function VehicleCard({ vehicle, onUpdated }: VehicleCardProps) {
+export function VehicleCard({ vehicle }: VehicleCardProps) {
+  const queryClient = useQueryClient();
+  
   // ── E-wallet panel state ───────────────────────────────────────────────────
   const [showEwallet,     setShowEwallet]     = useState(false);
   const [busy,            setBusy]            = useState(false);
@@ -87,8 +90,13 @@ export function VehicleCard({ vehicle, onUpdated }: VehicleCardProps) {
   // ── Model edit state ───────────────────────────────────────────────────────
   const [editingModel, setEditingModel] = useState(false);
   const [modelVal,     setModelVal]     = useState(vehicle.model);
-  const [modelBusy,    setModelBusy]    = useState(false);
   const [modelMsg,     setModelMsg]     = useState<{ ok: boolean; text: string } | null>(null);
+
+  const [token, setToken] = useState<string | null>(null);
+  useState(() => {
+    import("@/lib/api").then(api => api.getToken().then(setToken));
+  });
+  const { mutateAsync: updateModel, isPending: modelBusy } = useUpdateVehicleModel(token);
 
   // ── Provider selection ─────────────────────────────────────────────────────
   const availableToAdd = useMemo(
@@ -136,7 +144,7 @@ export function VehicleCard({ vehicle, onUpdated }: VehicleCardProps) {
     setMsg(null);
     try {
       await fn();
-      if (typeof onUpdated === "function") await Promise.resolve(onUpdated());
+      queryClient.invalidateQueries({ queryKey: ["vehicles"] });
     } catch (e: unknown) {
       setMsg({ ok: false, text: e instanceof Error ? e.message : "Error." });
     } finally {
@@ -167,17 +175,13 @@ export function VehicleCard({ vehicle, onUpdated }: VehicleCardProps) {
       setEditingModel(false);
       return;
     }
-    setModelBusy(true);
     setModelMsg(null);
     try {
-      await api("PATCH", `${plate}/model`, { model: trimmed });
+      await updateModel({ plate, model: trimmed });
       setModelMsg({ ok: true, text: "Model berhasil diperbarui." });
       setEditingModel(false);
-      if (typeof onUpdated === "function") await Promise.resolve(onUpdated());
     } catch (e: unknown) {
       setModelMsg({ ok: false, text: e instanceof Error ? e.message : "Gagal menyimpan." });
-    } finally {
-      setModelBusy(false);
     }
   };
 

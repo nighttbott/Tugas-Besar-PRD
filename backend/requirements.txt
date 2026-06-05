@@ -5,3 +5,6 @@ redis[hiredis]==5.0.8
 pydantic-settings==2.4.0
 websockets==13.1
 async-timeout
+sqlalchemy>=2.0.0
+asyncpg>=0.28.0
+aiomqtt>=2.0.0
