@@ -77,9 +77,15 @@ class MQTTManager:
                                 logger.info(f"Published to {topic}: {payload}")
                             except MqttError as e:
                                 logger.error(f"Failed to publish to {topic}: {e}")
+                                # Re-queue the command so it's not lost
+                                self._command_queue.put_nowait((topic, payload))
+                                break # Break inner loop to force reconnection
                             finally:
                                 self._command_queue.task_done()
                         except asyncio.TimeoutError:
+                            if listener_task.done():
+                                logger.error("MQTT listener task died. Forcing reconnection...")
+                                break
                             continue # Check stop_event and try again
                         
                     listener_task.cancel()

@@ -235,22 +235,21 @@ async def process_gate_trigger(req: GateTriggerRequest, db: AsyncSession) -> Gat
             
         await delete_active_session(plate)
 
-        if vehicle:
-            event = {
-                "type":          "gate_exit",
-                "plate":         plate,
-                "plate_raw":     vehicle.plate_raw,
-                "gate_id":       req.gate_id,
-                "owner":         vehicle.owner,
-                "vehicle_model": vehicle.model,
-                "duration_secs": history_record.duration_secs,
-                "fee":           est_fee,
-                "confidence":    req.confidence,
-                "timestamp":     ts,
-                "payment_method": payment_method,
-                "paid_provider": paid_provider,
-            }
-            await ws_manager.broadcast_gate_event(event, vehicle_nim=vehicle.nim if vehicle else None)
+        event = {
+            "type":          "gate_exit",
+            "plate":         plate,
+            "plate_raw":     vehicle.plate_raw if vehicle else plate,
+            "gate_id":       req.gate_id,
+            "owner":         vehicle.owner if vehicle else "Tamu",
+            "vehicle_model": vehicle.model if vehicle else "Tidak Diketahui",
+            "duration_secs": history_record.duration_secs,
+            "fee":           est_fee,
+            "confidence":    req.confidence,
+            "timestamp":     ts,
+            "payment_method": payment_method,
+            "paid_provider": paid_provider,
+        }
+        await ws_manager.broadcast_gate_event(event, vehicle_nim=vehicle.nim if vehicle else None)
 
         await mqtt_manager.publish_command(req.gate_id, {
             "action":      "open_gate",
