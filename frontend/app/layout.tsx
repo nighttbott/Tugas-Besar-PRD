@@ -20,6 +20,7 @@
  * No inline <style> blocks anywhere. All CSS is in one cacheable file.
  */
 import type { Metadata } from "next";
+import Providers from "./providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -41,7 +42,11 @@ export default function RootLayout({
 }) {
   return (
     <html lang="id">
-      <body>{children}</body>
+      <body>
+        <Providers>
+          {children}
+        </Providers>
+      </body>
     </html>
   );
 }

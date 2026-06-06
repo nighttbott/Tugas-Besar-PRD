@@ -35,8 +35,21 @@ async def lifespan(app: FastAPI):
         logger.info("✅ Redis connection OK.")
     except Exception as e:
         logger.error("❌ Redis connection failed: %s. Running without cache.", e)
+        
+    # Auto-create tables (for development without migrations)
+    from core.database_sql import engine
+    from models.domain import Base
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("✅ PostgreSQL tables initialized.")
+    
+    # Start MQTT Manager
+    from core.mqtt_manager import mqtt_manager
+    await mqtt_manager.start()
+    
     yield
     logger.info("🛑 Shutting down...")
+    await mqtt_manager.stop()
     await close_redis()
 
 

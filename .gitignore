@@ -49,3 +49,14 @@ Thumbs.db
 .vscode/settings.json
 .idea/
 *.suo
+
+# ── Database & Docker Data ───────────────────────────────────────────────────
+# Ignore old legacy JSON DB files
+backend/db.json
+backend/history.json
+
+# Ignore Docker named volumes local binds (if mapped locally)
+pgdata/
+redisdata/
+mosquitto/data/
+mosquitto/log/

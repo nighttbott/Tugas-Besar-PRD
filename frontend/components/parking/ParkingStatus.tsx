@@ -16,9 +16,10 @@
  */
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { vehicleApi, type SessionStats, type ActiveSession } from "@/lib/api";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { type ActiveSession } from "@/lib/api";
 import { LiveGateEvent } from "@/components/ui/LiveGateEvent";
+import { useParkingSessions } from "@/hooks/useParkingSessions";
 
 interface ParkingStatusProps {
   totalVehicles: number;  // passed from parent (vehicle list count)
@@ -53,35 +54,15 @@ function formatEntryTime(iso: string) {
 }
 
 export function ParkingStatus({ totalVehicles, onGateEvent }: ParkingStatusProps) {
-  const [stats, setStats]       = useState<SessionStats | null>(null);
-  const [loading, setLoading]   = useState(true);
-  const [error, setError]       = useState<string | null>(null);
+  const { data: stats, isLoading: loading, error: errorObj, refetch: fetchStats } = useParkingSessions();
+  const error = errorObj instanceof Error ? errorObj.message : null;
+
   const [liveDur, setLiveDur]   = useState<{ label: string; estFee: string; estFeeNum: number } | null>(null);
   const timerRef                = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const today = new Date().toLocaleDateString("id-ID", {
     weekday: "long", day: "numeric", month: "long", year: "numeric",
   });
-
-  // ── Fetch sessions from backend ────────────────────────────────────────────
-  const fetchStats = useCallback(async () => {
-    try {
-      const data = await vehicleApi.sessions();
-      setStats(data);
-      setError(null);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Gagal memuat data.");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchStats();
-    // Refresh stats every 30 seconds
-    const id = setInterval(fetchStats, 30_000);
-    return () => clearInterval(id);
-  }, [fetchStats]);
 
   // ── Live duration ticker for active sessions ───────────────────────────────
   useEffect(() => {

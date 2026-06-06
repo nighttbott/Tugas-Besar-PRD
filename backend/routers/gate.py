@@ -20,6 +20,9 @@ from models.gate import GateTriggerRequest, GateTriggerResponse
 from services.gate_service import process_gate_trigger, get_history
 from services.ws_manager import ws_manager
 
+from sqlalchemy.ext.asyncio import AsyncSession
+from core.database_sql import get_db
+
 logger = logging.getLogger("gate_router")
 
 router = APIRouter()
@@ -39,8 +42,9 @@ router = APIRouter()
 async def gate_trigger(
     request: GateTriggerRequest,
     _: Annotated[None, Depends(require_anpr_key)],
+    db: AsyncSession = Depends(get_db)
 ) -> GateTriggerResponse:
-    return await process_gate_trigger(request)
+    return await process_gate_trigger(request, db)
 
 
 # ── GET /api/v1/gate/history ──────────────────────────────────────────────────
@@ -50,9 +54,10 @@ async def gate_trigger(
 )
 async def parking_history(
     _token_payload: Annotated[dict, Depends(require_dashboard_token)],
+    db: AsyncSession = Depends(get_db),
     limit: int = Query(default=50, le=200),
 ) -> list[dict]:
-    return await get_history(limit=limit)
+    return await get_history(db, limit=limit)
 
 
 # ── GET /api/v1/gate/status ───────────────────────────────────────────────────

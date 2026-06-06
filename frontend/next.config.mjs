@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: 'standalone',
   // Allow next/image to serve from the local public directory
   images: {
     unoptimized: true,   // serve PNG logos as-is (no CDN needed for campus LAN)

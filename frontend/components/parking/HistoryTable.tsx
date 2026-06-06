@@ -5,8 +5,9 @@
  */
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useEffect, Fragment } from "react";
 import type { Vehicle } from "@/lib/api";
+import { useParkingHistory } from "@/hooks/useParkingHistory";
 
 // Gate ID → readable location (mirrors backend GATE_LOCATIONS)
 const GATE_LABELS: Record<string, string> = {
@@ -61,9 +62,6 @@ function confColor(c: number) {
 }
 
 export function HistoryTable({ vehicles }: HistoryTableProps) {
-  const [records,  setRecords]  = useState<HistoryRecord[]>([]);
-  const [loading,  setLoading]  = useState(true);
-  const [error,    setError]    = useState<string | null>(null);
   const [filterPlat,  setFilterPlat]  = useState("all");
   const [filterBulan, setFilterBulan] = useState(NOW_MONTH);
   const [page, setPage] = useState(1);
@@ -71,23 +69,13 @@ export function HistoryTable({ vehicles }: HistoryTableProps) {
 
   useEffect(() => setPage(1), [filterPlat, filterBulan]);
 
-  useEffect(() => {
-    import("@/lib/api").then(({ gateApi }) =>
-      gateApi.getHistory(200)
-        .then((data) => {
-          const userPlates = new Set(vehicles.map((v) => v.plate_normalized));
-          const filtered = (data as HistoryRecord[]).filter((r) =>
-            userPlates.size === 0 || userPlates.has(r.plate)
-          );
-          setRecords(filtered);
-          setLoading(false);
-        })
-        .catch((e: unknown) => {
-          setError(e instanceof Error ? e.message : "Gagal memuat riwayat.");
-          setLoading(false);
-        })
-    );
-  }, [vehicles]);
+  const { data: recordsData = [], isLoading: loading, error: errorObj } = useParkingHistory(200);
+  const error = errorObj instanceof Error ? errorObj.message : null;
+  
+  const userPlates = new Set(vehicles.map((v) => v.plate_normalized));
+  const records = (recordsData as HistoryRecord[]).filter((r) =>
+    userPlates.has(r.plate)
+  );
 
   const filtered = records.filter((r) => {
     const platMatch = filterPlat === "all" || r.plate === filterPlat;
@@ -163,7 +151,7 @@ export function HistoryTable({ vehicles }: HistoryTableProps) {
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={6} style={{ textAlign: "center", color: "#aaa", padding: "22px 0" }}>
+                    <td colSpan={7} style={{ textAlign: "center", color: "#aaa", padding: "22px 0" }}>
                       Tidak ada data untuk filter ini.
                     </td>
                   </tr>
@@ -247,11 +235,11 @@ export function HistoryTable({ vehicles }: HistoryTableProps) {
                 {Array.from({ length: totalPages }, (_, i) => i + 1)
                   .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
                   .map((p, idx, arr) => (
-                    <>
+                    <Fragment key={`page-${p}`}>
                       {idx > 0 && arr[idx - 1] !== p - 1 && (
                         <span key={`ellipsis-${p}`} style={{ padding: "3px 6px", color: "#aaa" }}>...</span>
                       )}
-                      <button key={p} type="button" onClick={() => setPage(p)}
+                      <button type="button" onClick={() => setPage(p)}
                         style={{
                           padding: "3px 8px", border: "1px solid",
                           borderColor: page === p ? "#337ab7" : "#ddd",
@@ -260,7 +248,7 @@ export function HistoryTable({ vehicles }: HistoryTableProps) {
                           color: page === p ? "#fff" : "#555",
                           fontWeight: page === p ? 600 : 400,
                         }}>{p}</button>
-                    </>
+                    </Fragment>
                   ))
                 }
                 <button type="button" onClick={() => setPage(p => p + 1)} disabled={page === totalPages}

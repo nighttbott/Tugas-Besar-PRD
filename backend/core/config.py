@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # Di .env tulis satu baris: ESP32_DEVICE_KEYS={"G1":"esp32-secret-g1"}
     ESP32_DEVICE_KEYS: str = '{"G1":"esp32-secret-g1"}'
 
+    # ── Database ─────────────────────────────────────────────────────────────
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgrespassword@localhost:5432/anpr_db"
+
     # ── Redis ─────────────────────────────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379/0"
     REDIS_COOLDOWN_TTL: int = 10       # seconds — duplicate-trigger suppression
@@ -38,6 +41,12 @@ class Settings(BaseSettings):
 
     # ── Gate Hardware ─────────────────────────────────────────────────────────
     GATE_OPEN_DURATION_MS: int = 1000  # milliseconds the relay stays HIGH
+
+    # ── MQTT ──────────────────────────────────────────────────────────────────
+    MQTT_BROKER_URL: str = "localhost"
+    MQTT_BROKER_PORT: int = 1883
+    MQTT_USERNAME: str = ""
+    MQTT_PASSWORD: str = ""
 
 
 @lru_cache
