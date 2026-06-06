@@ -66,6 +66,11 @@ class History(Base):
     duration_secs: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     fee: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String, default="active", nullable=False)
+    
+    # New fields for better reporting
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    payment_method: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    paid_provider: Mapped[Optional[str]] = mapped_column(String, nullable=True)
 
     # Relationships
     vehicle: Mapped["Vehicle"] = relationship("Vehicle", back_populates="history")

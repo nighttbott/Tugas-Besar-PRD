@@ -256,12 +256,7 @@ function GateStatusChips() {
           Diperbarui otomatis setiap 5 detik · terakhir: {lastUpdate}
         </p>
       )}
-      <div className="alert alert-info" style={{ marginTop: 12, fontSize: 12 }}>
-        <strong>Cara kerja Status Gerbang:</strong> Setiap ESP32 yang terpasang di gerbang
-        menghubungkan diri ke backend via WebSocket saat menyala. Status <strong>Online</strong>{" "}
-        berarti ESP32 terhubung dan siap menerima perintah buka gerbang dari ANPR.{" "}
-        <strong>Offline</strong> berarti ESP32 belum menyala atau koneksi terputus.
-      </div>
+
     </div>
   );
 }

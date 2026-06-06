@@ -368,10 +368,7 @@ export default function ParkirPage() {
             )}
           </div>
 
-          <div className="alert alert-info" style={{ marginTop: 2 }}>
-            <strong>Verifikasi ANPR:</strong> Datang ke Pos Jaga Parkir dengan STNK untuk
-            verifikasi manual. Kendaraan <em>Belum Aktif</em> tidak dapat menggunakan gerbang otomatis.
-          </div>
+
         </div>
 
         {/* ══════════════════════════════════════════════════════════════════

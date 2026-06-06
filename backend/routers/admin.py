@@ -85,7 +85,7 @@ async def admin_list_vehicles(
             "model":                v.model,
             "status":               v.status,
             "verification_status":  v.verification_status,
-            "verified_at":          v.verified_at.isoformat() if v.verified_at else None,
+            "verified_at":          v.anpr_verified_at.isoformat() if v.anpr_verified_at else None,
             "verified_gate":        None, # We can query history if we need this, but for now None is ok
             "flag_reason":          None,
             "ewallets":             ewallets_data,

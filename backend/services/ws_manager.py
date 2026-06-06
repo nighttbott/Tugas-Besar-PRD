@@ -18,48 +18,56 @@ logger = logging.getLogger("ws_manager")
 
 class ConnectionManager:
     def __init__(self):
-        # Dashboard subscribers: any number of browser tabs
-        self._dashboard_clients: list[WebSocket] = []
+        # Dashboard subscribers: mapping of WebSocket to user payload dict
+        self._dashboard_clients: dict[WebSocket, dict] = {}
         # Gate controllers: one per physical gate
         self._gate_clients: dict[str, WebSocket] = {}
         self._lock = asyncio.Lock()
 
     # ── Dashboard (browser) ───────────────────────────────────────────────────
-    async def connect_dashboard(self, websocket: WebSocket):
+    async def connect_dashboard(self, websocket: WebSocket, payload: dict):
         await websocket.accept()
         async with self._lock:
-            self._dashboard_clients.append(websocket)
+            self._dashboard_clients[websocket] = payload
         logger.info("Dashboard client connected. Total: %d", len(self._dashboard_clients))
 
     async def disconnect_dashboard(self, websocket: WebSocket):
         async with self._lock:
-            self._dashboard_clients = [
-                ws for ws in self._dashboard_clients if ws is not websocket
-            ]
+            self._dashboard_clients.pop(websocket, None)
         logger.info("Dashboard client disconnected. Total: %d", len(self._dashboard_clients))
 
-    async def broadcast_gate_event(self, event: dict):
+    async def broadcast_gate_event(self, event: dict, vehicle_nim: str = None):
         """
-        Push a gate event JSON to ALL connected dashboard browsers.
-        Dead connections are pruned silently.
+        Push a gate event JSON to connected dashboard browsers.
+        Filter: Admins see everything. Users only see their own vehicles.
+        Guests (vehicle_nim=None) are only seen by admins.
         """
         payload = json.dumps(event)
         dead: list[WebSocket] = []
 
         async with self._lock:
-            clients = list(self._dashboard_clients)
+            clients = list(self._dashboard_clients.items())
 
-        for ws in clients:
-            try:
-                await ws.send_text(payload)
-            except Exception:
-                dead.append(ws)
+        for ws, user_payload in clients:
+            is_admin = user_payload.get("sub") == "parking_admin"
+            user_nim = user_payload.get("nim")
+            
+            can_see = False
+            if is_admin:
+                can_see = True
+            elif vehicle_nim and vehicle_nim == user_nim:
+                can_see = True
+
+            if can_see:
+                try:
+                    await ws.send_text(payload)
+                except Exception:
+                    dead.append(ws)
 
         if dead:
             async with self._lock:
-                self._dashboard_clients = [
-                    ws for ws in self._dashboard_clients if ws not in dead
-                ]
+                for ws in dead:
+                    self._dashboard_clients.pop(ws, None)
 
     # ── ESP32 Gate Controllers ────────────────────────────────────────────────
     async def connect_gate(self, gate_id: str, websocket: WebSocket):

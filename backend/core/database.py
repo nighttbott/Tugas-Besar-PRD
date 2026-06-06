@@ -63,22 +63,21 @@ async def close_redis():
         _redis = None
     _redis_ok = False
 
-async def check_cooldown(plate: str) -> bool:
-    key = f"cooldown:{_normalize(plate)}"
-    redis = await get_redis()
-    if redis:
-        return await redis.exists(key) == 1
-    exp = _mem_cooldowns.get(key, 0)
-    return time.time() < exp
-
-async def set_cooldown(plate: str):
+async def acquire_cooldown(plate: str) -> bool:
+    """Atomic lock: Returns True if successfully acquired (not in cooldown), False if already in cooldown."""
     key = f"cooldown:{_normalize(plate)}"
     redis = await get_redis()
     settings = get_settings()
     if redis:
-        await redis.set(key, "1", ex=settings.REDIS_COOLDOWN_TTL)
+        result = await redis.set(key, "1", ex=settings.REDIS_COOLDOWN_TTL, nx=True)
+        return bool(result)
     else:
-        _mem_cooldowns[key] = time.time() + settings.REDIS_COOLDOWN_TTL
+        now = time.time()
+        exp = _mem_cooldowns.get(key, 0)
+        if now < exp:
+            return False
+        _mem_cooldowns[key] = now + settings.REDIS_COOLDOWN_TTL
+        return True
 
 async def get_active_session(plate: str) -> Optional[dict]:
     key = f"session:{_normalize(plate)}"
