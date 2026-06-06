@@ -173,9 +173,11 @@ export function HistoryTable({ vehicles }: HistoryTableProps) {
                             {v?.plate_raw ?? r.plate}
                           </span>
                           <br />
-                          <span style={{ fontSize: 10.5, color: confColor(r.confidence) }}>
-                            ANPR {(r.confidence * 100).toFixed(0)}%
-                          </span>
+                          {r.confidence !== undefined && r.confidence !== null && (
+                            <span style={{ fontSize: 10.5, color: confColor(r.confidence) }}>
+                              ANPR {(r.confidence * 100).toFixed(0)}%
+                            </span>
+                          )}
                         </td>
                         <td>
                           <div style={{ fontSize: 13 }}>

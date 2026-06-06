@@ -63,10 +63,15 @@ async def parking_history(
 # ── GET /api/v1/gate/status ───────────────────────────────────────────────────
 @router.get("/status", summary="System health & gate connectivity")
 async def gate_status():
+    from core.mqtt_manager import mqtt_manager
+    
+    # Kumpulkan hanya gate yang value-nya True (online)
+    online_gates = [gate_id for gate_id, is_online in mqtt_manager.online_gates.items() if is_online]
+    
     return {
         "api": "ok",
         "dashboard_clients": ws_manager.dashboard_count,
-        "online_gates": ws_manager.online_gates,
+        "online_gates": online_gates,
     }
 
 
@@ -150,7 +155,7 @@ async def dashboard_ws_2(
     except JWTError:
         await websocket.close(code=4001, reason="Unauthorized")
         return
-    await ws_manager.connect_dashboard(websocket)
+    await ws_manager.connect_dashboard(websocket, payload)
     try:
         while True:
             await websocket.receive_text()

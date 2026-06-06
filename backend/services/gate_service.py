@@ -24,8 +24,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.orm import selectinload
 
 from core.database import (
-    check_cooldown,
-    set_cooldown,
+    acquire_cooldown,
     get_active_session,
     create_session,
     delete_active_session,
@@ -62,7 +61,7 @@ async def process_gate_trigger(req: GateTriggerRequest, db: AsyncSession) -> Gat
         )
 
     # ── 2. Cooldown check ─────────────────────────────────────────────────────
-    if await check_cooldown(plate):
+    if not await acquire_cooldown(plate):
         logger.info("[%s] In cooldown window — skipping.", plate)
         return GateTriggerResponse(
             action="cooldown",
@@ -80,7 +79,6 @@ async def process_gate_trigger(req: GateTriggerRequest, db: AsyncSession) -> Gat
     # ── 4. Blocked check (hanya untuk kendaraan terdaftar) ───────────────────
     if vehicle and vehicle.status == "blocked":
         logger.warning("[%s] Vehicle is blocked.", plate)
-        await set_cooldown(plate)
         return GateTriggerResponse(
             action="deny_access",
             plate_number=plate,
@@ -95,7 +93,6 @@ async def process_gate_trigger(req: GateTriggerRequest, db: AsyncSession) -> Gat
         existing_session = await get_active_session(plate)
         if existing_session:
             logger.warning("[%s] Already has active session.", plate)
-            await set_cooldown(plate)
             return GateTriggerResponse(
                 action="deny_access",
                 plate_number=plate,
@@ -105,31 +102,27 @@ async def process_gate_trigger(req: GateTriggerRequest, db: AsyncSession) -> Gat
             )
 
         session = await create_session(plate, req.gate_id, req.confidence, is_guest=vehicle is None)
-        await set_cooldown(plate)
 
         # Auto-verify saat entry pertama
-        if vehicle and not vehicle.verified_at:
+        if vehicle and not vehicle.anpr_verified_at:
             vehicle.verification_status      = "verified"
-            vehicle.verified_at              = datetime.now(timezone.utc)
-            vehicle.verified_gate            = req.gate_id
-            # verification_confidence removed from db model, we can skip it
+            vehicle.anpr_verified_at         = datetime.now(timezone.utc)
             vehicle.status                   = "active"
             await db.commit()
             logger.info("[%s] Auto-verified on first physical entry via gate %s.", plate, req.gate_id)
 
-        # Broadcast ke dashboard hanya kalau terdaftar
-        if vehicle:
-            event = {
-                "type":          "gate_entry",
-                "plate":         plate,
-                "plate_raw":     vehicle.plate_raw,
-                "gate_id":       req.gate_id,
-                "owner":         vehicle.owner,
-                "vehicle_model": vehicle.model,
-                "confidence":    req.confidence,
-                "timestamp":     ts,
-            }
-            await ws_manager.broadcast_gate_event(event)
+        # Broadcast ke dashboard selalu (terdaftar atau tamu)
+        event = {
+            "type":          "gate_entry",
+            "plate":         plate,
+            "plate_raw":     vehicle.plate_raw if vehicle else plate,
+            "gate_id":       req.gate_id,
+            "owner":         vehicle.owner if vehicle else "Tamu",
+            "vehicle_model": vehicle.model if vehicle else "Tidak Diketahui",
+            "confidence":    req.confidence,
+            "timestamp":     ts,
+        }
+        await ws_manager.broadcast_gate_event(event, vehicle_nim=vehicle.nim if vehicle else None)
 
         delivered = await mqtt_manager.publish_command(req.gate_id, {
             "action":      "open_gate",
@@ -157,7 +150,6 @@ async def process_gate_trigger(req: GateTriggerRequest, db: AsyncSession) -> Gat
         existing = await get_active_session(plate)
         if not existing:
             logger.warning("[%s] No active session — manual verification required.", plate)
-            await set_cooldown(plate)
             return GateTriggerResponse(
                 action="deny_access",
                 plate_number=plate,
@@ -166,10 +158,11 @@ async def process_gate_trigger(req: GateTriggerRequest, db: AsyncSession) -> Gat
                 timestamp=ts,
             )
 
-        # Cek apakah tamu belum di-approve
-        if existing.get("is_guest") and not existing.get("exit_approved"):
+        # Cek apakah tamu belum di-approve (Bypass jika kendaraan kini sudah terdaftar di DB)
+        is_currently_guest = existing.get("is_guest") and vehicle is None
+        
+        if is_currently_guest and not existing.get("exit_approved"):
             logger.warning("[%s] Guest session — exit not yet approved by admin.", plate)
-            await set_cooldown(plate)
             return GateTriggerResponse(
                 action="deny_access",
                 plate_number=plate,
@@ -202,7 +195,6 @@ async def process_gate_trigger(req: GateTriggerRequest, db: AsyncSession) -> Gat
                             plate, total_saldo, est_fee)
                 # Flag session supaya muncul di admin
                 await flag_manual_payment(plate)
-                await set_cooldown(plate)
                 return GateTriggerResponse(
                     action="deny_access",
                     plate_number=plate,
@@ -231,6 +223,9 @@ async def process_gate_trigger(req: GateTriggerRequest, db: AsyncSession) -> Gat
             duration_secs=int(duration_secs),
             fee=est_fee,
             status="completed",
+            confidence=req.confidence,
+            payment_method=payment_method,
+            paid_provider=paid_provider,
         )
         
         # Only attach to vehicle if it exists in DB
@@ -239,7 +234,6 @@ async def process_gate_trigger(req: GateTriggerRequest, db: AsyncSession) -> Gat
             await db.commit()
             
         await delete_active_session(plate)
-        await set_cooldown(plate)
 
         if vehicle:
             event = {
@@ -253,8 +247,10 @@ async def process_gate_trigger(req: GateTriggerRequest, db: AsyncSession) -> Gat
                 "fee":           est_fee,
                 "confidence":    req.confidence,
                 "timestamp":     ts,
+                "payment_method": payment_method,
+                "paid_provider": paid_provider,
             }
-            await ws_manager.broadcast_gate_event(event)
+            await ws_manager.broadcast_gate_event(event, vehicle_nim=vehicle.nim if vehicle else None)
 
         await mqtt_manager.publish_command(req.gate_id, {
             "action":      "open_gate",
@@ -290,6 +286,9 @@ async def get_history(db: AsyncSession, limit: int = 50) -> list[dict]:
             "duration_secs": r.duration_secs,
             "fee": r.fee,
             "status": r.status,
+            "confidence": r.confidence,
+            "payment_method": r.payment_method,
+            "paid_provider": r.paid_provider,
             "gate_location": gate_location(r.gate_id)
         }
         for r in records
