@@ -41,8 +41,8 @@ static const int STATUS_LED_PIN = 2;  // Built-in LED
 
 // ── Servo Configuration ──
 Servo gateServo;
-static const int ANGLE_CLOSED = 0;  
-static const int ANGLE_OPEN   = 90; 
+static const int ANGLE_CLOSED = 90;  
+static const int ANGLE_OPEN   = 0; 
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STATE

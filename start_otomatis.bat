@@ -6,6 +6,32 @@ echo     ANPR PARKING SYSTEM - AUTO START (WINDOWS)
 echo =======================================================
 echo.
 
+:: 0. Pilih Mode Gerbang
+echo Pilih Mode Kamera ANPR:
+echo [1] Gerbang Masuk (Entry - G1)
+echo [2] Gerbang Keluar (Exit - EXIT1)
+set /p "GATE_CHOICE=Masukkan pilihan (1/2): "
+
+if "%GATE_CHOICE%"=="2" goto mode_exit
+if "%GATE_CHOICE%"=="1" goto mode_entry
+
+:mode_default
+echo Pilihan tidak valid. Menggunakan default (Masuk - G1).
+:mode_entry
+set "TARGET_DIR=entry"
+set "TARGET_ID=G1"
+echo Mode terpilih: MASUK (G1)
+goto mode_end
+
+:mode_exit
+set "TARGET_DIR=exit"
+set "TARGET_ID=G1"
+echo Mode terpilih: KELUAR (Namun tetap menggunakan ID G1)
+goto mode_end
+
+:mode_end
+echo.
+
 :: 1. Dapatkan IPv4 lokal (Wi-Fi / Ethernet) dan hindari IP WSL/VirtualBox
 echo [1] Melacak IP Address Laptop...
 set "MY_IP="
@@ -44,20 +70,31 @@ if not exist "%ENV_FILE%" (
 set "TEMP_ENV=anpr\.env.tmp"
 if exist "%TEMP_ENV%" del "%TEMP_ENV%"
 
-:: Baca file lama, ganti baris API_ENDPOINT, lalu tulis ke file baru
+:: Baca file lama, ganti baris API_ENDPOINT, GATE_DIRECTION, GATE_ID lalu tulis ke file baru
 for /f "tokens=* delims=" %%A in ('type "%ENV_FILE%"') do (
     set "LINE=%%A"
     echo !LINE! | findstr /B "API_ENDPOINT=" >nul
     if not errorlevel 1 (
         echo API_ENDPOINT=http://%MY_IP%:8000/api/v1/gate/trigger>> "%TEMP_ENV%"
     ) else (
-        echo !LINE!>> "%TEMP_ENV%"
+        echo !LINE! | findstr /B "GATE_DIRECTION=" >nul
+        if not errorlevel 1 (
+            echo GATE_DIRECTION=%TARGET_DIR%>> "%TEMP_ENV%"
+        ) else (
+            echo !LINE! | findstr /B "GATE_ID=" >nul
+            if not errorlevel 1 (
+                echo GATE_ID=%TARGET_ID%>> "%TEMP_ENV%"
+            ) else (
+                echo !LINE!>> "%TEMP_ENV%"
+            )
+        )
     )
 )
 
 :: Timpa file asli
 move /Y "%TEMP_ENV%" "%ENV_FILE%" >nul
-echo     Sukses mengubah API_ENDPOINT menjadi http://%MY_IP%:8000
+echo     Sukses mengatur API_ENDPOINT menjadi http://%MY_IP%:8000
+echo     Sukses mengatur Gerbang menjadi: %TARGET_ID% (%TARGET_DIR%)
 echo.
 
 :: 3. Jalankan Docker

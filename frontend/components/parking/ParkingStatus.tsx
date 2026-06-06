@@ -256,12 +256,7 @@ function GateStatusChips() {
           Diperbarui otomatis setiap 5 detik · terakhir: {lastUpdate}
         </p>
       )}
-      <div className="alert alert-info" style={{ marginTop: 12, fontSize: 12 }}>
-        <strong>Cara kerja Status Gerbang:</strong> Setiap ESP32 yang terpasang di gerbang
-        menghubungkan diri ke backend via <strong>MQTT Broker</strong>. Status <strong>Online</strong>{" "}
-        berarti Broker beroperasi dan siap menyalurkan perintah buka gerbang dari ANPR ke ESP32.{" "}
-        <strong>Offline</strong> berarti koneksi server MQTT terputus.
-      </div>
+
     </div>
   );
 }
