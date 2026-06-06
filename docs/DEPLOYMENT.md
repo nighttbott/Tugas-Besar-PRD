@@ -1,292 +1,109 @@
-# Deployment Guide — WSL2 (Backend/Frontend) + Windows PowerShell (ANPR)
+# Deployment Guide — Docker & Skrip Otomatisasi (Windows)
 
-## Prerequisites
-
-| Tool | Platform | Version | Install |
-|------|----------|---------|---------|
-| WSL2 (Ubuntu 24.04) | Windows | 2.x | `wsl --install` |
-| Python | WSL2 + Windows | 3.11+ | WSL: `sudo apt install python3.11` / Win: python.org |
-| Node.js | WSL2 | 20 LTS | `nvm install 20` |
-| Redis | WSL2 | 7.x | `sudo apt install redis-server` |
-| Arduino IDE | Windows | 2.x | arduino.cc |
-| VS Code | Windows | Latest | With WSL + Python extensions |
-| python-dotenv | Windows (ANPR) | Latest | `pip install python-dotenv` |
-
-> **Note:** The ANPR script runs on **Windows PowerShell** because WSL2 cannot
-> access the laptop camera directly. All other components run in WSL2.
+Sistem ANPR Parkir kini telah berevolusi menggunakan arsitektur **Docker Compose**, **PostgreSQL**, dan **MQTT**. Dokumen ini memberikan panduan ringkas dan modern untuk melakukan *deployment* atau menjalankan *prototype* di mesin lokal.
 
 ---
 
-## Step 1 — Clone & Setup
+## 🛠 Prerequisites (Kebutuhan Sistem)
 
-```bash
-# In WSL2
-git clone https://github.com/your-org/anpr-parking.git
-cd anpr-parking
-```
+| Tool | Platform | Keterangan |
+|------|----------|------------|
+| **Docker Desktop** | Windows/Mac | Pastikan WSL2 Engine aktif di pengaturannya. |
+| **Python 3.10+** | Windows | Wajib diinstal di *host* (Windows) untuk skrip kamera ANPR. |
+| **Arduino IDE 2.x**| Windows/Mac | Untuk melakukan *flash* kode ke board ESP32 pertama kali. |
+| **Kabel Jumper** | Fisik | Untuk merakit Servo SG90 ke ESP32 (GND, 5V, Pin 18). |
 
----
-
-## Step 2 — Backend (WSL2)
-
-```bash
-cd backend
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-# Configure secrets
-cp .env.example .env
-nano .env   # Fill in values (see token generation below)
-
-# Generate JWT_SECRET_KEY (run once)
-python -c "import secrets; print(secrets.token_hex(32))"
-# → paste into .env as JWT_SECRET_KEY
-
-# Generate ANPR service token
-python -c "
-from core.config import get_settings
-from core.security import create_anpr_service_token
-print(create_anpr_service_token(get_settings()))
-"
-# → paste into .env as ANPR_SERVICE_TOKEN
-# → also paste into anpr/.env as API_SECRET_KEY
-
-# Generate dashboard token (for frontend .env.local)
-python -c "
-from core.config import get_settings
-from core.security import create_dashboard_token
-print(create_dashboard_token('2021184750', get_settings()))
-"
-# → paste into frontend/.env.local as NEXT_PUBLIC_DASHBOARD_TOKEN
-
-# Start Redis
-sudo service redis-server start
-
-# Start FastAPI
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
-# Swagger UI (DEBUG=true only): http://localhost:8000/docs
-```
-
-**backend/.env** should look like:
-```env
-APP_NAME=ANPR Parking Gate — ITB Jatinangor
-APP_VERSION=1.0.0
-DEBUG=true
-
-JWT_SECRET_KEY=<32-byte hex from step above>
-JWT_ALGORITHM=HS256
-
-ANPR_SERVICE_TOKEN=<token from create_anpr_service_token>
-ESP32_GATE_TOKEN=<token from create_esp32_gate_token>
-
-REDIS_URL=redis://localhost:6379/0
-REDIS_COOLDOWN_TTL=10
-REDIS_SESSION_TTL=86400
-
-CORS_ORIGINS=["http://localhost:3000"]
-GATE_OPEN_DURATION_MS=1000
-```
+> **Catatan:** Skrip kamera (ANPR) berjalan di luar Docker (di Windows PowerShell/CMD langsung) agar *library* OpenCV (`cv2`) dapat mendeteksi webcam atau IP Camera secara *real-time* tanpa terhambat jaringan virtualisasi.
 
 ---
 
-## Step 3 — Frontend (WSL2)
+## 🚀 Langkah 1: Kunci Keamanan & Konfigurasi
 
-```bash
-cd frontend
-npm install
+Semua kredensial disederhanakan. Anda hanya perlu **2 kunci rahasia utama**.
 
-cp .env.local.example .env.local
-nano .env.local
-```
-
-**frontend/.env.local** should look like:
-```env
-NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_WS_URL=ws://localhost:8000
-NEXT_PUBLIC_DASHBOARD_TOKEN=<token from create_dashboard_token>
-```
-
-```bash
-# Copy SIX CSS files into public/css/
-mkdir -p public/css
-# Copy: bootstrap.min.css, bootstrap-theme.min.css, roboto.css,
-#        all.css, v4-shims.css, jquery-confirm.min.css,
-#        bootstrap-notifications.min.css
-
-# Font Awesome webfonts (for icons)
-mkdir -p public/webfonts
-# Option A: Download from github.com/FortAwesome/Font-Awesome/releases/tag/5.15.4
-#   extract webfonts/ folder → copy *.woff2 files to public/webfonts/
-# Option B: Replace all.css imports in globals.css with CDN link
-
-npm run dev
-# Student dashboard: http://localhost:3000/parkir
-# Admin panel:       http://localhost:3000/admin
-```
+1. Buka Terminal / CMD di laptop Anda.
+2. Buat dua buah kunci acak menggunakan perintah Python berikut:
+   ```bash
+   python -c "import secrets; print(secrets.token_hex(32))"
+   ```
+3. Salin (*copy*) dua hasil yang berbeda tersebut.
+4. Buka dan isi file **`backend/.env`**:
+   ```ini
+   # Ganti dengan kunci hex pertama
+   JWT_SECRET_KEY="104e13636b13b1f5f9ed... (contoh)"
+   
+   # Ganti dengan kunci hex kedua
+   ANPR_KEY="f192b4512b40cf... (contoh)"
+   ```
+5. Buka dan isi file **`anpr/.env`**:
+   ```ini
+   # Ganti dengan kunci hex kedua (Wajib SAMA dengan backend)
+   ANPR_KEY="f192b4512b40cf... (contoh)"
+   ```
 
 ---
 
-## Step 4 — ANPR Script (Windows PowerShell)
+## ⚙️ Langkah 2: Skrip 1-Klik (`start_otomatis.bat`)
 
-> The ANPR script runs in **Windows PowerShell**, not WSL2, because WSL2 cannot
-> access the laptop's built-in camera (DirectShow device).
+Untuk menjalankan seluruh arsitektur secara instan tanpa mengetik perintah Docker manual:
 
-```powershell
-# Open PowerShell in the anpr/ folder
-cd D:\path\to\anpr-parking\anpr
+1. Klik ganda (2x) file **`start_otomatis.bat`** di *File Explorer* Anda.
+2. Akan muncul menu pilihan interaktif di *Command Prompt*:
+   ```text
+   Pilih Mode Kamera ANPR:
+   [1] Gerbang Masuk (Entry - G1)
+   [2] Gerbang Keluar (Exit - EXIT1)
+   Masukkan pilihan (1/2):
+   ```
+3. Ketik `1` lalu tekan Enter untuk mode Masuk.
+4. Skrip akan secara otomatis:
+   - Melacak **IP WiFi/Hotspot** laptop Anda.
+   - Mengubah `API_ENDPOINT` di file `anpr/.env` menggunakan IP tersebut.
+   - Menjalankan **Docker Compose** di *background*.
+   - Membuka virtual environment `.venv` dan menyalakan kamera.
 
-# Create virtual environment
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-
-# Install dependencies (python-dotenv is required)
-pip install -r requirements.txt
-
-# Create .env file — NO inline comments after values
-# Copy ANPR_SERVICE_TOKEN from backend/.env as API_SECRET_KEY
-```
-
-**anpr/.env** must look exactly like this (no `# comments` on value lines):
-```env
-API_ENDPOINT=http://localhost:8000/api/v1/gate/trigger
-API_SECRET_KEY=<same value as ANPR_SERVICE_TOKEN in backend/.env>
-CAMERA_INDEX=0
-GATE_ID=G1
-GATE_DIRECTION=entry
-```
-
-```powershell
-# Run the ANPR script
-python anpr_main.py
-
-# For exit gate (second camera)
-# Change .env: GATE_ID=EXIT1, GATE_DIRECTION=exit, CAMERA_INDEX=1
-# Then re-run
-```
-
-**What you should see when working correctly:**
-```
-ANPR started | gate=G1 | dir=entry | camera=0 | endpoint=http://localhost:8000/...
-YOLO conf=0.63 | OCR → 'D4321ITB'
-🔒 Plate locked: D4321ITB | ocr_conf=100% | yolo_conf=63%
-→ Trigger dispatched | plate=D4321ITB | dir=entry | gate=G1 | ocr_conf=100%
-✅ GATE G1 OPENED | plate=D4321ITB | owner=Muhammad Abduh | fee=–
-```
-
-**Common errors:**
-
-| Error | Cause | Fix |
-|---|---|---|
-| `401 Unauthorized` | Wrong or missing API_SECRET_KEY | Copy ANPR_SERVICE_TOKEN from backend/.env |
-| `ValueError: invalid literal for int` | Inline comments in .env | Remove all `# comments` from value lines |
-| `deny_access: belum diverifikasi ANPR` | Vehicle not verified | Go to /admin → Verifikasi ANPR |
-| `deny_access: plate not registered` | Plate not in DB | Add via /parkir → Kendaraan Saya |
-| `Cannot reach backend` | FastAPI not running | Start uvicorn in WSL2 |
+> **Tips Presentasi Multi-Kamera:** Jika ingin mendemokan gerbang masuk dan keluar bersamaan, buat salinan folder `anpr` menjadi `anpr_keluar`. Pada `anpr_keluar/.env`, atur `CAMERA_INDEX` ke IP Webcam HP Anda dan `GATE_DIRECTION=exit`. Jalankan secara bersamaan!
 
 ---
 
-## Step 5 — ESP32 Firmware
+## 🔌 Langkah 3: Setup Perangkat IoT (ESP32)
 
-1. Open `firmware/esp32_gate/esp32_gate.ino` in Arduino IDE 2.x
+Karena kini kita menggunakan protokol **MQTT** dan fitur **Captive Portal (WiFiManager)**, Anda tidak perlu lagi melakukan *hardcode* nama Wi-Fi dan IP di kodingan C++!
 
-2. Generate ESP32 gate token (in WSL2):
-```bash
-cd backend
-source .venv/bin/activate
-python -c "
-from core.config import get_settings
-from core.security import create_esp32_gate_token
-print(create_esp32_gate_token('G1', get_settings()))
-"
-```
-
-3. Edit the sketch constants:
-```cpp
-static const char* WIFI_SSID     = "ITB-PARKING-IOT";
-static const char* WIFI_PASSWORD  = "your_wifi_password";
-static const char* WS_URL =
-    "ws://192.168.x.x:8000/ws/esp32/G1?token=<token from step 2>";
-```
-
-4. Board: **ESP32 Dev Module** → Upload
-5. Open Serial Monitor (115200 baud) → should show "Connected to backend"
+1. Buka file `firmware/esp32_gate/esp32_mqtt_gate.ino` di Arduino IDE.
+2. Pastikan Anda telah menginstal pustaka (*library*):
+   - `PubSubClient` (oleh Nick O'Leary)
+   - `ArduinoJson` (oleh Benoit Blanchon)
+   - `ESP32Servo`
+   - `WiFiManager` (oleh tzapu)
+3. Sambungkan ESP32 dan klik **Upload**.
+4. Cabut ESP32 dan colokkan ke **Batok Charger HP** atau **Powerbank**. *(Jangan gunakan USB laptop agar motor servo tidak kekurangan arus/brownout).*
+5. Buka Wi-Fi HP Anda, lalu cari hotspot bernama **Gerbang_ITB_Setup**.
+6. Sambungkan dan layar pengaturan akan muncul (Captive Portal).
+7. Pilih Wi-Fi kampus / Hotspot Anda. Di kotak *MQTT Server IP*, ketikkan **IP Laptop Docker Anda** (IP yang dilacak oleh skrip `.bat` tadi).
+8. Klik Save. Selesai!
 
 ---
 
-## Step 6 — Add & Verify a Vehicle (End-to-End Test)
+## 📈 Langkah 4: Pengujian Keseluruhan (End-to-End)
 
-```
-1. Open http://localhost:3000/parkir
-2. Tab "Kendaraan Saya" → Tambah Kendaraan Baru
-   → Enter plate: F 6797 OB, Jenis: Motor, Model: ADV
-   → Click "+ Daftarkan"
-3. Click "Hubungkan E-Wallet" → add GoPay Rp100.000
-4. Open http://localhost:3000/admin (admin / parkir2024)
-5. Find F6797OB → Click "Verifikasi ANPR" → Confirm
-6. Run ANPR script in PowerShell → show plate to camera
-7. Terminal should show: ✅ GATE G1 OPENED
-8. Dashboard Status Parkir → vehicle appears in "Kendaraan Sedang Parkir"
-```
+1. Buka browser dan akses **`http://localhost:3000`** (Dashboard Mahasiswa).
+2. Daftarkan plat nomor baru (contoh: `D 1234 ITB`), jenis kendaraan, dan modelnya.
+3. Hubungkan E-Wallet dan isikan saldo (contoh: Rp100.000).
+4. Hadapkan plat nomor tersebut ke depan **Kamera ANPR**.
+5. Kamera mendeteksi dan mengirim ke Backend.
+6. Motor Servo berputar 90 derajat (terbuka).
+7. Di layar Web, plat `D 1234 ITB` otomatis muncul di tab **Status Parkir (Sedang Parkir)** berkat fitur React Query *Auto-Polling*.
+8. Uji cobakan kamera sebagai Gerbang Keluar (`exit`), saldo e-wallet akan terpotong secara instan di tab **Riwayat & Biaya**.
 
 ---
 
-## VS Code Workspace
+## 🛠️ Docker Cheat Sheet (Pencarian Masalah)
 
-Create `anpr-parking.code-workspace` in the project root:
+Jika Anda perlu melihat apa yang terjadi di belakang layar, gunakan terminal dan ketik perintah berikut:
 
-```json
-{
-  "folders": [
-    { "name": "Backend",  "path": "./backend"  },
-    { "name": "Frontend", "path": "./frontend" },
-    { "name": "ANPR",     "path": "./anpr"     },
-    { "name": "Firmware", "path": "./firmware" },
-    { "name": "Docs",     "path": "./docs"     }
-  ],
-  "settings": {
-    "python.defaultInterpreterPath": "${workspaceFolder:Backend}/.venv/bin/python",
-    "files.exclude": {
-      "**/node_modules": true,
-      "**/__pycache__": true,
-      "**/.next": true
-    }
-  }
-}
-```
-
----
-
-## Production Process Manager (WSL2 + supervisor)
-
-```bash
-sudo apt install supervisor
-
-# Backend
-sudo nano /etc/supervisor/conf.d/anpr-backend.conf
-```
-
-```ini
-[program:anpr-backend]
-command=/home/ubuntu/anpr-parking/backend/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
-directory=/home/ubuntu/anpr-parking/backend
-environment=HOME="/home/ubuntu"
-autostart=true
-autorestart=true
-stderr_logfile=/var/log/anpr-backend.err.log
-stdout_logfile=/var/log/anpr-backend.out.log
-user=ubuntu
-
-[program:anpr-redis]
-command=redis-server
-autostart=true
-autorestart=true
-```
-
-```bash
-sudo supervisorctl reread
-sudo supervisorctl update
-sudo supervisorctl status
-```
-
-For the ANPR script on Windows, use **Task Scheduler** to auto-start `run_anpr.ps1` on login.
+- **Melihat Status Layanan:** `docker compose ps`
+- **Melihat Pemakaian RAM/CPU:** `docker stats`
+- **Melihat Log Server API:** `docker compose logs backend -f`
+- **Merestart Cepat Backend:** `docker compose restart backend`
+- **Menghapus Semua Data Database (Reset):** `docker compose down -v`

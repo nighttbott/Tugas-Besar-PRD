@@ -1,394 +1,128 @@
 # ANPR Parking Gate System — ITB Jatinangor
-## Project Structure (WSL2 + VS Code Monorepo)
+## Project Structure (Docker + PostgreSQL + MQTT)
+
+Berikut adalah struktur direktori dari sistem SiParkir beserta penjelasan fungsi utama dari setiap file dan folder.
 
 ```
 anpr-parking/
 │
-├── .gitignore                               # Ignores .env, node_modules, *.pt, build artifacts
-├── PROJECT_STRUCTURE.md                     # This file
+├── .gitignore                               # Daftar file/folder yang tidak diunggah ke Git (seperti .env, node_modules, data database lokal).
+├── PROJECT_STRUCTURE.md                     # File ini: Menjelaskan peta dan fungsi setiap komponen dalam proyek.
+├── README.md                                # Panduan utama untuk instalasi, deployment, dan cara menjalankan proyek.
+├── docker-compose.yml                       # File orkestrasi Docker yang merangkai 5 layanan (Database, Redis, MQTT, Backend API, Web Frontend).
+├── start_otomatis.bat                       # Skrip otomatisasi Windows (1-klik) untuk mencari IP laptop, mengatur .env, dan menyalakan seluruh sistem.
 │
-├── backend/                                 # FastAPI (Python 3.11+)
-│   ├── __init__.py
-│   ├── main.py                              # App entrypoint: CORS, lifespan, 3 router registrations
-│   ├── requirements.txt                     # fastapi, uvicorn, python-jose, redis, pydantic-settings
-│   ├── .env.example                         # Secret template → copy to .env
-│   ├── db.json                              # ← PERSISTENT STORAGE (auto-created on first run)
-│   │                                        #   Survives server restarts. Contains VEHICLE_DB.
-│   │                                        #   Written by save_vehicle_db() after every mutation.
-│   │                                        #   Add to .gitignore in production.
+├── backend/                                 # 🧠 SERVER API (Python FastAPI)
+│   ├── main.py                              # Titik masuk utama aplikasi FastAPI. Mengatur CORS, siklus hidup server, dan mendaftarkan semua rute.
+│   ├── requirements.txt                     # Daftar pustaka Python yang dibutuhkan (fastapi, asyncpg, sqlalchemy, aiomqtt, dll).
+│   ├── Dockerfile                           # Skrip konfigurasi untuk membangun wadah (container) Docker backend berbasis Linux yang ringan.
+│   ├── .env.example                         # Contoh format file rahasia (.env) untuk kunci keamanan dan URL database.
 │   │
-│   ├── core/
-│   │   ├── __init__.py
-│   │   ├── config.py                        # Pydantic-settings: JWT keys, Redis URL, CORS, tokens
-│   │   ├── security.py                      # JWT encode/decode + 4 role-based dependencies:
-│   │   │                                    #   require_anpr_token      → sub: anpr_service
-│   │   │                                    #   require_dashboard_token → sub: dashboard_user
-│   │   │                                    #   require_admin_token     → sub: parking_admin
-│   │   │                                    #   verify_esp32_token      → sub: esp32_gate
-│   │   │                                    # Token generators:
-│   │   │                                    #   create_anpr_service_token()
-│   │   │                                    #   create_esp32_gate_token()
-│   │   │                                    #   create_dashboard_token()
-│   │   │                                    #   create_admin_token()
-│   │   └── database.py                      # Two-tier storage:
-│   │                                        #   VEHICLE_DB dict  → backed by db.json (persistent)
-│   │                                        #   HISTORY_DB list  → in-memory (resets on restart)
-│   │                                        #   SUPPORTED_EWALLETS: GoPay, OVO, ShopeePay, Dana, LinkAja
-│   │                                        #   save_vehicle_db() → writes VEHICLE_DB to db.json
-│   │                                        #   Redis: session CRUD, cooldown, balance deduction on exit
+│   ├── core/                                # Komponen Inti Server
+│   │   ├── config.py                        # Pengaturan aplikasi terpusat (Pydantic-settings) mengambil nilai dari .env.
+│   │   ├── security.py                      # Sistem keamanan: enkripsi/dekripsi JWT untuk user dan validasi X-ANPR-KEY untuk kamera.
+│   │   ├── database_sql.py                  # Konfigurasi ORM SQLAlchemy dan mesin asinkron (asyncpg) untuk terhubung ke PostgreSQL.
+│   │   ├── database.py                      # Konfigurasi in-memory Redis: mengatur sesi parkir aktif dan Atomic Cooldown untuk mencegah spam gerbang.
+│   │   └── mqtt_manager.py                  # Manajer MQTT asinkron: Menerbitkan perintah buka gerbang ke ESP32 dan mendengarkan status Online/Offline (LWT) dari ESP32.
 │   │
-│   ├── models/
-│   │   ├── __init__.py
-│   │   ├── gate.py                          # Pydantic: GateTriggerRequest, GateTriggerResponse
-│   │   └── vehicle.py                       # Pydantic: RegisteredVehicle, EWallet, ActiveSession
+│   ├── models/                              # Struktur Data (Database & API)
+│   │   ├── domain.py                        # Skema tabel database PostgreSQL (Tabel Vehicle, EWallet, History).
+│   │   └── gate.py                          # Skema validasi Pydantic untuk input/output API khusus rute gerbang.
 │   │
-│   ├── routers/
-│   │   ├── __init__.py
-│   │   ├── gate.py                          # Gate trigger + WebSocket routes:
-│   │   │                                    #   POST /api/v1/gate/trigger  (anpr_service token)
-│   │   │                                    #   GET  /api/v1/gate/history  (dashboard_user token) ← FIXED
-│   │   │                                    #   GET  /api/v1/gate/status   (public)
-│   │   │                                    #   WS   /ws/gate-events       (dashboard WS)
-│   │   │                                    #   WS   /ws/esp32/{gate_id}   (ESP32 WS)
-│   │   │
-│   │   ├── vehicles.py                      # Student vehicle CRUD + e-wallet management:
-│   │   │                                    #   GET    /api/v1/vehicles/                     (list)
-│   │   │                                    #   POST   /api/v1/vehicles/                     (add)
-│   │   │                                    #   DELETE /api/v1/vehicles/{plate}              (remove)
-│   │   │                                    #   GET    /api/v1/vehicles/sessions             (stats)
-│   │   │                                    #   POST   /api/v1/vehicles/{plate}/ewallet      (add)
-│   │   │                                    #   PUT    /api/v1/vehicles/{plate}/ewallet/{p}/balance
-│   │   │                                    #   DELETE /api/v1/vehicles/{plate}/ewallet/{p} (remove)
-│   │   │                                    #   PUT    /api/v1/vehicles/{plate}/ewallet/{p}/primary
-│   │   │                                    #   PUT    /api/v1/vehicles/{plate}/verify       (ANPR verify)
-│   │   │                                    #   All require: dashboard_user token
-│   │   │                                    #   All mutations call save_vehicle_db() immediately
-│   │   │
-│   │   └── admin.py                         # Admin-only routes (parking_admin token):
-│   │                                        #   POST /api/v1/admin/auth/token           (login → JWT)
-│   │                                        #   GET  /api/v1/admin/vehicles             (all vehicles)
-│   │                                        #   POST /api/v1/admin/vehicles/{p}/verify-anpr
-│   │                                        #   POST /api/v1/admin/vehicles/{p}/unverify-anpr
-│   │                                        #   Both verify/unverify call save_vehicle_db()
+│   ├── routers/                             # Pengelompokan Rute API (Endpoints)
+│   │   ├── gate.py                          # Rute yang diakses oleh kamera ANPR (trigger), publik (status gerbang), dan WebSockets (Live Feed ke dasbor).
+│   │   ├── vehicles.py                      # Rute untuk mahasiswa mendaftarkan kendaraan, mengelola E-Wallet, dan melihat riwayat parkirnya.
+│   │   └── admin.py                         # Rute eksklusif petugas untuk memverifikasi STNK, melihat semua data, dan memindahkan kepemilikan kendaraan.
 │   │
-│   └── services/
-│       ├── __init__.py
-│       ├── gate_service.py                  # Gate decision tree (5 steps):
-│       │                                    #   1. confidence ≥ 0.85 (OCR vote consistency)
-│       │                                    #   2. Redis cooldown check
-│       │                                    #   3. Plate exists in VEHICLE_DB
-│       │                                    #   4. anpr_verified == True  ← AUTHORITATIVE check
-│       │                                    #   5. status != "blocked"
-│       │                                    #   Entry: create Redis session
-│       │                                    #   Exit:  deduct e-wallet balance, archive to HISTORY_DB
-│       └── ws_manager.py                    # WebSocket connection manager:
-│                                            #   dashboard fan-out broadcast
-│                                            #   ESP32 per-gate command delivery
-│                                            #   GateStatusChips polls /gate/status every 5s
+│   └── services/                            # Logika Bisnis (Aturan Sistem)
+│       ├── gate_service.py                  # Logika utama saat kendaraan tiba:
+│       │                                    #   1. Mengecek akurasi AI ≥ 75%.
+│       │                                    #   2. Mencegah pemindaian beruntun (Cooldown 10 detik).
+│       │                                    #   3. Mengecek status terdaftar di PostgreSQL dan persetujuan satpam.
+│       │                                    #   4. (Masuk) Membuat sesi, (Keluar) Memotong saldo GoPay dan memindahkan ke histori.
+│       └── ws_manager.py                    # Manajer WebSockets yang bertugas menyiarkan kejadian gerbang secara real-time ke layar web pengguna yang tepat.
 │
-├── frontend/                                # Next.js 14 (App Router, TypeScript)
-│   ├── package.json
-│   ├── tsconfig.json
-│   ├── next.config.ts                       # images: unoptimized, API proxy rewrites, cache headers
-│   ├── .env.local.example                   # Template → copy to .env.local
+├── frontend/                                # 💻 ANTARMUKA WEB (Next.js 14 & React Query)
+│   ├── package.json                         # Daftar pustaka Node.js yang dibutuhkan.
+│   ├── next.config.mjs                      # Konfigurasi Next.js (mengaktifkan mode standalone untuk kompilasi Docker).
+│   ├── Dockerfile                           # Skrip konfigurasi multi-stage untuk membangun gambar Docker website produksi yang sangat kecil.
 │   │
-│   ├── app/
-│   │   ├── globals.css                      # Single CSS source of truth:
-│   │   │                                    #   .site-container — shared alignment class used by
-│   │   │                                    #     Navbar inner div, Breadcrumb wrapper, .page div
-│   │   │                                    #     (padding: 20px, max-width: 1200px, margin: auto)
-│   │   │                                    #   @import Bootstrap 3.3.7, Roboto, Font Awesome 5
-│   │   │                                    #   Verbatim style-20200730.css rules (real SIX)
-│   │   │                                    #   All parking component styles
-│   │   │                                    #   Responsive: ≤992px, ≤768px, ≤480px
-│   │   │
-│   │   ├── layout.tsx                       # Root layout: import globals.css, metadata
-│   │   ├── page.tsx                         # Root → redirect to /parkir
-│   │   │
-│   │   ├── parkir/
-│   │   │   └── page.tsx                     # Student parking dashboard:
-│   │   │                                    #   Fetches vehicles from backend on mount
-│   │   │                                    #   Add vehicle with live Indonesian plate validation
-│   │   │                                    #   Delete vehicle (blocked if currently parked)
-│   │   │                                    #   Passes token down to all child components
-│   │   │
-│   │   ├── admin/
-│   │   │   └── page.tsx                     # Admin panel (URL: /admin):
-│   │   │                                    #   Login screen → POST /api/v1/admin/auth/token
-│   │   │                                    #   Session in sessionStorage (clears on tab close)
-│   │   │                                    #   Vehicle table: all vehicles, search, filter by ANPR
-│   │   │                                    #   Per-row: verify ANPR with notes / revoke
-│   │   │                                    #   Stat cards: total / verified / unverified / parked
-│   │   │
-│   │   └── api/auth/token/route.ts          # Next.js API route: issue dashboard JWT
+│   ├── app/                                 # Halaman Web Utama
+│   │   ├── globals.css                      # Pusat seluruh desain tampilan. Menampung grid Bootstrap dan class utama `.site-container`.
+│   │   ├── layout.tsx                       # Kerangka HTML utama yang membungkus semua halaman web.
+│   │   ├── providers.tsx                    # Mengaktifkan TanStack (React) Query untuk cache data.
+│   │   ├── parkir/                          # Halaman Dashboard Mahasiswa (http://localhost:3000/).
+│   │   └── admin/                           # Halaman Panel Petugas Keamanan (http://localhost:3000/admin).
 │   │
-│   ├── components/
-│   │   ├── layout/
-│   │   │   ├── Navbar.tsx                   # Pixel-accurate SIX navbar (from struktur.html source):
-│   │   │   │                                #   Uses .site-container for alignment
-│   │   │   │                                #   background #222, fa-home (font-size 18)
-│   │   │   │                                #   #9d9d9d text, #080808 on hover/active
-│   │   │   │                                #   fa-user-circle-o + Bootstrap caret
-│   │   │   └── Breadcrumb.tsx               # Bootstrap ol.breadcrumb:
-│   │   │                                    #   Uses .site-container wrapper (margin-top: 18px gap)
-│   │   │                                    #   border-radius 4px → "separate rectangle" look
-│   │   │                                    #   separator »
-│   │   │
-│   │   ├── parking/
-│   │   │   ├── TabMenu.tsx                  # 4-tab switcher
-│   │   │   ├── VehicleCard.tsx              # Vehicle row + full e-wallet panel:
-│   │   │   │                                #   Real PNG logos from /img/ewallet/
-│   │   │   │                                #   useMemo for addProvider (fixes stale state bug)
-│   │   │   │                                #   Badge: "Aktif" only if anpr_verified=true AND active
-│   │   │   │                                #   onUpdated: optional, guarded with typeof check
-│   │   │   ├── ParkingStatus.tsx            # Status tab:
-│   │   │   │                                #   session.primary_ewallet (fixed field name)
-│   │   │   │                                #   GateStatusChips polls every 5s
-│   │   │   ├── HistoryTable.tsx             # Riwayat tab: GET /api/v1/gate/history (dashboard token)
-│   │   │   └── TarifInfo.tsx                # Tarif tab: calculator + rate cards
-│   │   │
-│   │   └── ui/
-│   │       ├── Badge.tsx
-│   │       ├── PlateTag.tsx
-│   │       └── LiveGateEvent.tsx            # Real-time gate feed:
-│   │                                        #   Shows "Menunggu aktivitas gerbang..." when empty
-│   │                                        #   null token → shows setup message
+│   ├── components/                          # Potongan Antarmuka (Reusable Components)
+│   │   └── parking/                         
+│   │       ├── HistoryTable.tsx             # Tabel riwayat keluar/masuk kendaraan, termasuk metode pembayaran dan akurasi OCR.
+│   │       ├── ParkingStatus.tsx            # Menampilkan kendaraan yang sedang di dalam dan status MQTT gerbang.
+│   │       ├── VehicleCard.tsx              # Kotak informasi kendaraan milik mahasiswa beserta opsi tambah E-Wallet.
+│   │       └── TabMenu.tsx                  # Navigasi tab (Kendaraan, Status, Riwayat, Tarif).
 │   │
-│   ├── hooks/
-│   │   ├── useGateEvents.ts                 # WS hook: exponential backoff, onEvent callback
-│   │   └── useParkingHistory.ts             # SWR hook: polls history every 60s
+│   ├── hooks/                               # Pengambil Data Otomatis (Custom Hooks)
+│   │   ├── useParkingSessions.ts            # Meminta data kendaraan di dalam parkiran setiap 30 detik.
+│   │   ├── useParkingHistory.ts             # Meminta data riwayat parkir setiap 60 detik.
+│   │   ├── useVehicles.ts                   # Meminta daftar kendaraan pengguna.
+│   │   ├── useAddVehicle.ts                 # Mengirim data kendaraan baru dan mereset cache agar web langsung ter-update.
+│   │   └── useGateEvents.ts                 # Menyadap jalur WebSockets untuk memunculkan notifikasi Live Feed.
 │   │
-│   ├── lib/
-│   │   └── api.ts                           # Typed fetch wrapper:
-│   │                                        #   ActiveSession.primary_ewallet (fixed field name)
-│   │                                        #   validatePlate() — Indonesian regex
-│   │                                        #   vehicleApi / gateApi / buildGateEventsWsUrl
-│   │
-│   └── public/
-│       ├── css/                             # SIX portal static CSS (no build step)
-│       │   ├── bootstrap.min.css
-│       │   ├── bootstrap-theme.min.css
-│       │   ├── roboto.css
-│       │   ├── all.css                      # paths fixed: /webfonts/
-│       │   ├── v4-shims.css
-│       │   ├── bootstrap-notifications.min.css
-│       │   └── jquery-confirm.min.css
-│       ├── img/
-│       │   └── ewallet/                     # Real e-wallet logos (PNG, served at /img/ewallet/)
-│       │       ├── gopay.png
-│       │       ├── ovo.png
-│       │       ├── shopeepay.png
-│       │       ├── dana.png
-│       │       └── linkaja.png
-│       └── webfonts/                        # Font Awesome webfonts (fa-solid-900.woff2 etc.)
-│                                            # Download from FA 5.15.4 or use CDN fallback
+│   └── lib/api.ts                           # Kumpulan fungsi fetch (pemanggil API) dan penyimpanan token JWT di browser.
 │
-├── anpr/                                    # ANPR Edge Script (Windows PowerShell / Python)
-│   ├── anpr_main.py                         # YOLOv8 + fast_plate_ocr, async HTTP via aiohttp
-│   │                                        #   load_dotenv() → reads .env automatically
-│   │                                        #   OCR-based confidence (vote consistency, NOT YOLO score)
-│   │                                        #   compute_ocr_confidence() → passes 0.0–1.0 to backend
-│   │                                        #   YOLO_MIN_CONF=0.25 (separate from backend threshold)
-│   │                                        #   Non-blocking: asyncio.run_coroutine_threadsafe()
-│   ├── requirements.txt                     # ultralytics, fast-plate-ocr, opencv-python, aiohttp,
-│   │                                        # python-dotenv  ← required for .env auto-loading
-│   └── .env                                 # API_ENDPOINT, API_SECRET_KEY (= ANPR_SERVICE_TOKEN),
-│                                            # CAMERA_INDEX, GATE_ID, GATE_DIRECTION
-│                                            # NO inline comments on value lines (breaks dotenv)
+├── anpr/                                    # 📷 KECERDASAN BUATAN (Python Edge Script)
+│   ├── anpr_main.py                         # Skrip yang berjalan di laptop. Menggunakan YOLOv8 untuk mencari plat, OCR untuk membaca teks, lalu mengirimnya ke Backend.
+│   ├── requirements.txt                     # Kebutuhan library AI (ultralytics, opencv, dll).
+│   └── .env                                 # File rahasia yang memuat IP Server dan ANPR_KEY. (Otomatis diisi oleh skrip start_otomatis.bat).
 │
-├── firmware/
+├── firmware/                                # 🛠 PERANGKAT KERAS IOT (C++ Arduino)
 │   └── esp32_gate/
-│       ├── esp32_gate.ino                   # ESP32 WebSocket gate controller
-│       └── README.md                        # Wiring, libraries, flashing guide
+│       └── esp32_mqtt_gate.ino              # Kode yang ditanam (flash) ke chip ESP32. 
+│                                            # Memiliki fitur Smart Device (Captive Portal), koneksi MQTT, dan algoritma penggerak Motor Servo yang presisi.
 │
-└── docs/
-    ├── SECURITY.md                          # Threat model, tokens, TLS, data persistence
-    └── DEPLOYMENT.md                        # Full setup guide (WSL2 backend + Windows ANPR)
+└── mosquitto/                               # 📬 SERVER PESAN (MQTT Broker)
+    └── config/
+        └── mosquitto.conf                   # Mengatur agar mosquitto menerima koneksi di port 1883 tanpa hambatan (khusus pengembangan lokal).
 ```
 
 ---
 
-## Role & Token Architecture
+## Token & Security Architecture
 
-```
-┌──────────────────┬──────────────────┬───────────┬────────────────────────────────────┐
-│ Client           │ sub claim        │ TTL       │ Protected endpoints                 │
-├──────────────────┼──────────────────┼───────────┼────────────────────────────────────┤
-│ ANPR script      │ anpr_service     │ 365 days  │ POST /gate/trigger only             │
-│ Dashboard user   │ dashboard_user   │ 8 hours   │ /vehicles/* + GET /gate/history     │
-│ Admin (petugas)  │ parking_admin    │ 365 days  │ /admin/* only                       │
-│ ESP32 gate unit  │ esp32_gate       │ 30 days   │ WS /ws/esp32/{gate_id}              │
-└──────────────────┴──────────────────┴───────────┴────────────────────────────────────┘
-```
+Sistem ini memusatkan keamanan pada sisi Backend (Server) untuk mencegah peretasan melalui jaringan Wi-Fi lokal.
 
-**Admin credentials** (in `routers/admin.py` → `ADMIN_USERS`):
+### 1. Kunci Sesi Web (JWT_SECRET_KEY)
+Berfungsi sebagai stempel digital. Digunakan oleh FastAPI untuk men-*generate* tiket *login* bagi Mahasiswa dan Admin.
+- **Lokasi:** `backend/.env`
+- Frontend akan otomatis menerima JWT (JSON Web Token) saat pengguna berhasil *login* dan menyimpannya di memori browser.
 
-| Username | Password |
-|---|---|
-| `admin` | `parkir2024` |
-| `petugas` | `gerbang123` |
+### 2. Kunci Keamanan Kamera (ANPR_KEY)
+Berfungsi layaknya kata sandi mesin. Mencegah orang asing menembak API pembuka gerbang dari laptop mereka sendiri.
+- **Lokasi:** `backend/.env` **dan** `anpr/.env` (Kedua file ini harus memiliki kunci yang sama persis).
+- Dikirim secara tersembunyi oleh skrip kamera ANPR melalui header HTTP `X-ANPR-KEY`.
 
----
-
-## ANPR Gate Decision Tree
-
-```
-POST /api/v1/gate/trigger
-  ├─ 1. OCR confidence ≥ 0.85?          NO → low_confidence (gate holds)
-  ├─ 2. Redis cooldown active?           YES → cooldown (duplicate ignored)
-  ├─ 3. Plate in VEHICLE_DB?            NO → deny_access (unregistered)
-  ├─ 4. anpr_verified == True?          NO → deny_access (not verified by petugas)
-  ├─ 5. status == "blocked"?            YES → deny_access (explicitly banned)
-  └─ PASS → open_gate
-       ├─ Entry: create Redis session, broadcast WS event, send ESP32 command
-       └─ Exit:  deduct e-wallet balance, archive to HISTORY_DB, open gate
-```
-
-**Important:** Step 4 checks `anpr_verified`, NOT `status`. A vehicle with
-`anpr_verified=True` opens the gate regardless of `status` field (unless blocked).
+### 3. Keamanan Alat IoT & Pelacakan Status Wasiat (MQTT LWT)
+Alat fisik ESP32 **TIDAK** menggunakan token JWT agar proses mikrokontroler tetap ringan. Status alat ini dijaga oleh protokol MQTT.
+- Saat menyala, ESP32 berteriak `"online"` ke Broker Mosquitto (Topik: `gate/{gate_id}/status`).
+- ESP32 juga mendaftarkan surat wasiat atau *Last Will and Testament (LWT)* berisikan `"offline"`.
+- Jika ESP32 mati lampu, dicabut, atau jaringan putusnya, Broker Mosquitto akan mewujudkan wasiat tersebut dengan otomatis menyiarkan pesan `"offline"`. Ini memungkinkan Backend dan Website langsung tahu status *real-time*-nya.
 
 ---
 
-## E-Wallet & Balance Flow
+## E-Wallet & Autodebit Flow
 
-```
-Add e-wallet via web (GoPay/OVO/ShopeePay/Dana/LinkAja)
-  → Set initial balance (customizable anytime via "Edit Saldo")
-  → Balance persisted in db.json via save_vehicle_db()
-
-Gate exit trigger:
-  close_session() in database.py:
-    → Try Primary e-wallet: balance -= fee
-    → If balance < fee: try Cadangan
-    → If both fail: payment_method = "manual"
-    → save_vehicle_db() called → balance change persists to db.json
-```
-
----
-
-## Confidence Architecture (ANPR)
-
-```
-YOLO score (0.3–0.7)      → "Is there a plate in this box?"
-                              Only used to filter noise (YOLO_MIN_CONF=0.25)
-
-OCR vote consistency      → "How sure are we of the plate text?"
-(0.0–1.0)                   = best_plate_count / len(history)
-                              Sent to backend as `confidence`
-                              Backend threshold: ≥ 0.85
-
-Example: 9/10 OCR readings agree → ocr_confidence = 0.90 → gate opens
-```
-
----
-
-## Data Persistence
-
-```
-db.json (backend/) — written on every mutation, read on startup
-  ├── Vehicles added via web (/parkir) ✓
-  ├── E-wallets added/removed ✓
-  ├── Balance changes (autodebit + manual edit) ✓
-  ├── ANPR verifications (admin panel) ✓
-  └── ANPR revocations ✓
-
-NOT persisted (resets on server restart):
-  ├── HISTORY_DB (completed sessions) — use PostgreSQL for production
-  └── Redis sessions (active parking) — Redis is persistent if configured
-```
+Alur transaksi yang serba otomatis (Frictionless Payment):
+1. Kendaraan terdeteksi oleh kamera di gerbang keluar (`exit`).
+2. Server mencari tiket masuk kendaraan tersebut di penyimpanan memori berkecepatan tinggi (Redis).
+3. Server menghitung durasi parkir ke dalam bentuk Jam.
+4. Server memeriksa daftar E-Wallet (GoPay, OVO, dll) yang didaftarkan mahasiswa.
+5. Jika Saldo mencukupi, sistem langsung memotong saldo (Autodebit).
+6. Informasi dipindahkan ke tabel riwayat (History) di PostgreSQL dengan keterangan metode pembayaran (`paid_provider`).
+7. Jika Saldo kurang, gerbang tetap tertutup (ditolak) dan layar petugas akan menunjukkan notifikasi untuk pembayaran tunai secara manual.
 
 ---
 
 ## CSS Alignment System
 
-```
-.site-container {                    ← single shared class
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 0 20px;
-}
-
-Used by:
-  Navbar inner div   → className="site-container"  (nav items align left edge)
-  Breadcrumb wrapper → className="site-container"  (breadcrumb aligns left edge)
-  Page content       → className="page site-container" (content aligns left edge)
-
-All three share one CSS rule → pixel-identical left edges on any screen width.
-```
-
----
-
-## Quick Start
-
-### Backend (WSL2)
-```bash
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env          # fill JWT_SECRET_KEY, generate tokens
-sudo service redis-server start
-uvicorn main:app --reload --port 8000
-# db.json created automatically on first vehicle add
-```
-
-### Frontend (WSL2)
-```bash
-cd frontend
-npm install
-cp .env.local.example .env.local   # set NEXT_PUBLIC_DASHBOARD_TOKEN
-npm run dev
-# Student: http://localhost:3000/parkir
-# Admin:   http://localhost:3000/admin
-```
-
-### ANPR Script (Windows PowerShell)
-```powershell
-cd anpr
-# Activate venv
-.\.venv\Scripts\Activate.ps1
-
-# Install dependencies (includes python-dotenv)
-pip install -r requirements.txt
-
-# Create .env with NO inline comments
-# API_SECRET_KEY = same value as ANPR_SERVICE_TOKEN in backend/.env
-# Then just run:
-python anpr_main.py
-```
-
-### Admin Panel
-```
-1. http://localhost:3000/admin
-2. Login: admin / parkir2024
-3. Find vehicle → "Verifikasi ANPR" → gate now opens for that plate
-```
-
-### TOKEN
-1. JWT_SECRET_KEY : python -c "import secrets; print(secrets.token_hex(32))"
-Location : backend/.env
-2. ANPR_SERVICE_TOKEN : python -c "
-from core.config import get_settings
-from core.security import create_anpr_service_token
-print(create_anpr_service_token(get_settings()))
-"
-Location : backend/.env, anpr/.env
-3. ESP32_GATE_TOKEN : 
-G1 : python -c "
-from core.config import get_settings
-from core.security import create_esp32_gate_token
-print(create_esp32_gate_token('G1', get_settings()))
-"
-EXIT : python -c "
-from core.config import get_settings
-from core.security import create_esp32_gate_token
-print(create_esp32_gate_token('EXIT1', get_settings()))
-"
-Location : backend/.env, firmware/esp32_gate/esp32_gate.ino
-Contoh : static const char* WS_URL =
-"ws://192.168.1.100:8000/ws/esp32/G1?token=eyJhbGci...";
-4. NEXT_PUBLIC_DASHBOARD_TOKEN : python -c "
-from core.config import get_settings
-from core.security import create_dashboard_token
-print(create_dashboard_token('2021184750', get_settings()))
-"
-Location : frontend/.env.local
+Semua letak antarmuka web (Navbar, Breadcrumb, dan Tabel) dikendalikan oleh satu kelas utama yaitu `.site-container` di dalam file `globals.css`. 
+Saat ini menggunakan `max-width: 95%` sehingga desain UI (antarmuka) otomatis membentang elegan pada monitor resolusi tinggi (seperti layar komputer di pos keamanan) tanpa menyisakan ruang kosong yang kaku di sisi kiri-kanan.
